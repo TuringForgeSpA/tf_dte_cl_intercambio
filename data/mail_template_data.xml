@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ruta real: data/mail_template_data.xml -->
+<odoo>
+    <record id="mail_template_exchange_dte" model="mail.template">
+        <field name="name">DTE: envío al receptor</field>
+        <field name="model_id" ref="account.model_account_move"/>
+        <field name="subject">{{ object._tf_dte_cl_document_name() }} N° {{ object.tf_dte_cl_folio }} - {{ object.company_id.name }}</field>
+        <field name="email_from">{{ object.company_id.tf_dte_cl_dte_email or object.company_id.email }}</field>
+        <field name="body_html" type="html">
+            <div style="font-family: Arial, sans-serif; font-size: 13px;">
+                <p>Estimados,</p>
+                <p>Adjuntamos el documento tributario electrónico
+                    <strong t-out="object._tf_dte_cl_document_name()"/> N°
+                    <strong t-out="object.tf_dte_cl_folio"/>, emitido por
+                    <t t-out="object.company_id.name"/>, en formato XML y PDF.</p>
+                <p>Este correo corresponde al intercambio de documentos electrónicos
+                    establecido por el Servicio de Impuestos Internos.</p>
+                <p><t t-out="object.company_id.name"/></p>
+            </div>
+        </field>
+        <field name="lang">{{ object.partner_id.lang }}</field>
+        <field name="auto_delete" eval="False"/>
+    </record>
+</odoo>

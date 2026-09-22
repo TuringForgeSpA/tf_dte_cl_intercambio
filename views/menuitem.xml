@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ruta real: views/menuitem.xml -->
+<odoo>
+
+    <menuitem id="menu_tf_dte_cl_received" name="Documentos recibidos"
+              parent="tf_dte_cl.menu_tf_dte_cl_root" action="action_tf_dte_cl_received" sequence="5"/>
+    <menuitem id="menu_tf_dte_cl_exchange_envelope" name="Sobres recibidos"
+              parent="tf_dte_cl.menu_tf_dte_cl_root" action="action_tf_dte_cl_exchange_envelope" sequence="6"/>
+
+</odoo>

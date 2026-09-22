@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ruta real: data/cron.xml -->
+<odoo noupdate="1">
+
+    <record id="ir_cron_tf_dte_cl_exchange_send" model="ir.cron">
+        <field name="name">DTE: enviar documentos aceptados al receptor</field>
+        <field name="model_id" ref="account.model_account_move"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_tf_dte_cl_exchange_send()</field>
+        <field name="interval_number">15</field>
+        <field name="interval_type">minutes</field>
+        <field name="active">True</field>
+    </record>
+
+    <record id="ir_cron_tf_dte_cl_answer_receptions" model="ir.cron">
+        <field name="name">DTE: responder la recepción de los sobres recibidos</field>
+        <field name="model_id" ref="model_tf_dte_cl_exchange_envelope"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_tf_dte_cl_answer_receptions()</field>
+        <field name="interval_number">10</field>
+        <field name="interval_type">minutes</field>
+        <field name="active">True</field>
+    </record>
+
+</odoo>

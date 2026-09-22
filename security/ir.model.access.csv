@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_tf_dte_cl_exchange_envelope_invoice,tf_dte_cl.exchange.envelope invoice,model_tf_dte_cl_exchange_envelope,account.group_account_invoice,1,1,0,0
+access_tf_dte_cl_exchange_envelope_manager,tf_dte_cl.exchange.envelope manager,model_tf_dte_cl_exchange_envelope,account.group_account_manager,1,1,1,1
+access_tf_dte_cl_received_invoice,tf_dte_cl.received invoice,model_tf_dte_cl_received,account.group_account_invoice,1,1,0,0
+access_tf_dte_cl_received_manager,tf_dte_cl.received manager,model_tf_dte_cl_received,account.group_account_manager,1,1,1,1
+access_tf_dte_cl_received_line_invoice,tf_dte_cl.received.line invoice,model_tf_dte_cl_received_line,account.group_account_invoice,1,0,0,0
+access_tf_dte_cl_received_line_manager,tf_dte_cl.received.line manager,model_tf_dte_cl_received_line,account.group_account_manager,1,1,1,1

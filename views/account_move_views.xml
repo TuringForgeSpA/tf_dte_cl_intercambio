@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ruta real: views/account_move_views.xml -->
+<odoo>
+
+    <record id="view_move_form_tf_dte_cl_intercambio" model="ir.ui.view">
+        <field name="name">account.move.form.tf_dte_cl_intercambio</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="tf_dte_cl.view_move_form_tf_dte_cl"/>
+        <field name="arch" type="xml">
+            <!-- Se agrega al final de la pestaña DTE: Odoo no admite 'string' como selector. -->
+            <xpath expr="//page[@name='tf_dte_cl']" position="inside">
+                <group string="Intercambio con el receptor">
+                    <field name="tf_dte_cl_exchange_state"/>
+                    <field name="tf_dte_cl_exchange_email"/>
+                    <field name="tf_dte_cl_exchange_date"/>
+                    <field name="tf_dte_cl_exchange_error" invisible="not tf_dte_cl_exchange_error"/>
+                    <button name="action_tf_dte_cl_exchange_send" type="object" class="btn-link"
+                            string="Enviar al receptor" icon="fa-envelope-o"
+                            invisible="tf_dte_cl_state not in ('accepted', 'accepted_objections')"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>

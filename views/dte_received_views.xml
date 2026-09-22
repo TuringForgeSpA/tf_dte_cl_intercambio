@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ruta real: views/dte_received_views.xml -->
+<odoo>
+
+    <record id="view_tf_dte_cl_received_list" model="ir.ui.view">
+        <field name="name">tf_dte_cl.received.list</field>
+        <field name="model">tf_dte_cl.received</field>
+        <field name="arch" type="xml">
+            <list create="false" decoration-muted="state == 'ignored'" decoration-success="state == 'billed'">
+                <field name="date"/>
+                <field name="partner_id"/>
+                <field name="issuer_vat"/>
+                <field name="document_type_name"/>
+                <field name="folio"/>
+                <field name="amount_total" sum="Total"/>
+                <field name="state" widget="badge" decoration-success="state == 'billed'"/>
+                <field name="move_id" optional="show"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+                <button name="action_tf_dte_cl_create_bill" type="object" string="Crear factura"
+                        icon="fa-file-text-o" invisible="state != 'received'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_tf_dte_cl_received_form" model="ir.ui.view">
+        <field name="name">tf_dte_cl.received.form</field>
+        <field name="model">tf_dte_cl.received</field>
+        <field name="arch" type="xml">
+            <form create="false">
+                <header>
+                    <button name="action_tf_dte_cl_create_bill" type="object" class="btn-primary"
+                            string="Crear factura de proveedor" invisible="state != 'received'"/>
+                    <button name="action_tf_dte_cl_ignore" type="object" string="Descartar"
+                            invisible="state != 'received'"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_open_move" type="object" class="oe_stat_button"
+                                icon="fa-file-text-o" string="Factura" invisible="not move_id"/>
+                    </div>
+                    <div class="oe_title">
+                        <h1><field name="display_reference"/></h1>
+                    </div>
+                    <group>
+                        <group string="Emisor">
+                            <field name="partner_id"/>
+                            <field name="issuer_vat"/>
+                            <field name="issuer_name"/>
+                            <field name="issuer_activity"/>
+                            <field name="issuer_email" widget="email"/>
+                        </group>
+                        <group string="Documento">
+                            <field name="document_type_name"/>
+                            <field name="folio"/>
+                            <field name="date"/>
+                            <field name="envelope_id"/>
+                            <field name="move_id"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                    <group string="Montos del DTE">
+                        <group>
+                            <field name="amount_net"/>
+                            <field name="amount_exempt"/>
+                        </group>
+                        <group>
+                            <field name="amount_tax"/>
+                            <field name="amount_total"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Detalle" name="lines">
+                            <field name="line_ids">
+                                <list>
+                                    <field name="name"/>
+                                    <field name="quantity"/>
+                                    <field name="price_unit"/>
+                                    <field name="amount" sum="Total"/>
+                                    <field name="is_exempt"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="XML" name="xml">
+                            <group>
+                                <field name="xml_file" filename="xml_filename"/>
+                                <field name="xml_filename" invisible="1"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_tf_dte_cl_received_search" model="ir.ui.view">
+        <field name="name">tf_dte_cl.received.search</field>
+        <field name="model">tf_dte_cl.received</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="partner_id"/>
+                <field name="folio"/>
+                <field name="issuer_vat"/>
+                <filter name="pending" string="Sin facturar" domain="[('state', '=', 'received')]"/>
+                <filter name="billed" string="Facturados" domain="[('state', '=', 'billed')]"/>
+                <group>
+                    <filter name="group_partner" string="Proveedor" context="{'group_by': 'partner_id'}"/>
+                    <filter name="group_type" string="Tipo de documento" context="{'group_by': 'document_type_name'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_tf_dte_cl_received" model="ir.actions.act_window">
+        <field name="name">Documentos recibidos</field>
+        <field name="res_model">tf_dte_cl.received</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_pending': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Aún no se reciben DTE de proveedores</p>
+            <p>Los documentos llegan por correo a la casilla de intercambio y se registran aquí.
+               Desde cada uno se puede crear la factura de proveedor en borrador.</p>
+        </field>
+    </record>
+
+    <record id="view_tf_dte_cl_exchange_envelope_list" model="ir.ui.view">
+        <field name="name">tf_dte_cl.exchange.envelope.list</field>
+        <field name="model">tf_dte_cl.exchange.envelope</field>
+        <field name="arch" type="xml">
+            <list create="false" decoration-danger="state in ('rejected', 'error')">
+                <field name="create_date"/>
+                <field name="name"/>
+                <field name="partner_id"/>
+                <field name="issuer_vat"/>
+                <field name="received_count"/>
+                <field name="response_date"/>
+                <field name="state" widget="badge" decoration-success="state == 'answered'"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_tf_dte_cl_exchange_envelope_form" model="ir.ui.view">
+        <field name="name">tf_dte_cl.exchange.envelope.form</field>
+        <field name="model">tf_dte_cl.exchange.envelope</field>
+        <field name="arch" type="xml">
+            <form create="false">
+                <header>
+                    <button name="action_tf_dte_cl_answer_reception" type="object" class="btn-primary"
+                            string="Responder recepción" invisible="state != 'received'"/>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_open_received" type="object" class="oe_stat_button" icon="fa-list">
+                            <field name="received_count" widget="statinfo" string="Documentos"/>
+                        </button>
+                    </div>
+                    <div class="alert alert-danger" role="alert" invisible="not error">
+                        <field name="error" readonly="1"/>
+                    </div>
+                    <div class="oe_title"><h1><field name="name"/></h1></div>
+                    <group>
+                        <group>
+                            <field name="partner_id"/>
+                            <field name="issuer_vat"/>
+                            <field name="set_id"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group>
+                            <field name="response_date"/>
+                            <field name="response_glosa"/>
+                            <field name="xml_file" filename="xml_filename"/>
+                            <field name="xml_filename" invisible="1"/>
+                            <field name="response_file" filename="response_filename" invisible="not response_file"/>
+                            <field name="response_filename" invisible="1"/>
+                        </group>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_tf_dte_cl_exchange_envelope" model="ir.actions.act_window">
+        <field name="name">Sobres recibidos</field>
+        <field name="res_model">tf_dte_cl.exchange.envelope</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+</odoo>

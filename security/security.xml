@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ruta real: security/security.xml -->
+<odoo>
+
+    <record id="rule_tf_dte_cl_exchange_envelope_company" model="ir.rule">
+        <field name="name">Sobre recibido: multicompañía</field>
+        <field name="model_id" ref="model_tf_dte_cl_exchange_envelope"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+
+    <record id="rule_tf_dte_cl_received_company" model="ir.rule">
+        <field name="name">Documento recibido: multicompañía</field>
+        <field name="model_id" ref="model_tf_dte_cl_received"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+
+</odoo>

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ruta real: views/res_config_settings_views.xml -->
+<odoo>
+
+    <record id="res_config_settings_view_form_tf_dte_cl_intercambio" model="ir.ui.view">
+        <field name="name">res.config.settings.form.tf_dte_cl_intercambio</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="tf_dte_cl.res_config_settings_view_form_tf_dte_cl"/>
+        <field name="arch" type="xml">
+            <xpath expr="//block[@name='tf_dte_cl_settings']" position="inside">
+                <setting id="tf_dte_cl_exchange" string="Intercambio de documentos" company_dependent="1"
+                         help="Envío del DTE al cliente y recepción de documentos de proveedores.">
+                    <field name="tf_dte_cl_exchange_auto_send"/>
+                    <div class="content-group mt8">
+                        <div class="row">
+                            <label for="tf_dte_cl_exchange_product_id" string="Producto para documentos recibidos"
+                                   class="col-lg-5 o_light_label"/>
+                            <field name="tf_dte_cl_exchange_product_id" options="{'no_create': True}"/>
+                        </div>
+                    </div>
+                    <div class="mt8">
+                        <button name="%(tf_dte_cl_intercambio.action_tf_dte_cl_received)d" type="action"
+                                string="Documentos recibidos" class="btn-link" icon="oi-arrow-right"/>
+                    </div>
+                </setting>
+            </xpath>
+        </field>
+    </record>
+
+</odoo>
