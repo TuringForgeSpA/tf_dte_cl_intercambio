@@ -13,26 +13,50 @@ N° 45 de 2003 y la Ley 19.983.
 - Botón para reenviar manualmente y estado visible en la factura.
 
 **Como receptor**
-- Recibe los sobres por correo en una casilla dedicada y registra cada documento.
-- Responde automáticamente la **recepción del envío**, que es un acuse técnico:
-  confirma que el archivo llegó y es válido, sin decidir nada comercial.
+- Recibe los documentos por correo en una casilla dedicada, o por carga manual,
+  y registra cada uno. Lee el sobre `EnvioDTE` estándar, un DTE suelto o el
+  envoltorio propio de un proveedor de facturación (por ejemplo, Acepta).
+- Responde automáticamente la **recepción del envío** cuando el archivo es un
+  sobre con carátula. Los formatos sin carátula no admiten esta respuesta,
+  porque cita el ID y la firma del sobre.
 - Botón **Crear factura de proveedor**: deja un borrador con una línea por cada
   detalle del XML, con la descripción del proveedor sobre un producto genérico,
-  el impuesto de compra por defecto en las líneas afectas y ninguno en las
-  exentas. Si el total no coincide con el del DTE, lo avisa en el chatter y
-  deja la factura en borrador igual.
-- Si el proveedor no existe, lo crea con el RUT, la razón social y el giro del XML.
+  el impuesto de compra en las líneas afectas y ninguno en las exentas. Los
+  descuentos y recargos globales se agregan como líneas. Si el total no
+  coincide con el del DTE, lo avisa y deja el borrador igual. Crea el proveedor
+  si no existe.
 
-## Pendiente (segunda etapa)
+**Aceptación y reclamo ante el SII**
 
-- Aceptación y reclamo comercial (`validacion_comercial`).
-- Acuse de recibo de mercaderías o servicios (`recepcion_mercaderias`), que
-  habilita la cesión de la factura.
-- Registro y consulta de reclamos ante el SII (`ingreso_reclamo_documento`,
-  `consulta_reclamo_documento`).
+Según la Ley 19.983 (modificada por la Ley 20.956), el receptor tiene **8 días
+corridos** desde la recepción del documento en el SII para reclamarlo; pasado
+ese plazo, se presume otorgado el acuse de recibo. El registro se hace con el
+servicio web del SII *Consulta y Registro de Aceptación/Reclamo a DTE recibido*
+(v1.2), que solo opera con facturas (33, 34 y 43).
 
-Estas respuestas usan estructuras de la librería que conviene validar con un
-XML recibido real antes de implementarlas.
+| Botón | Acciones en el SII |
+|---|---|
+| **Aceptar en el SII** | `ACD` (acepta el contenido) y `ERM` (otorga el acuse de recibo) |
+| **Reclamar en el SII** | `RCD` (reclamo al contenido), `RFP` o `RFT` (falta parcial o total de mercaderías), con un motivo que queda en el historial |
+| **Consultar SII** | Trae los eventos registrados y actualiza el estado del documento |
+
+El SII no permite aceptar un documento reclamado ni reclamar uno aceptado o con
+acuse de recibo; los botones se ocultan según el último evento.
+
+Tampoco admite eventos en facturas **al contado o sin costo** (forma de pago 1
+o 3 en el DTE): el SII responde con el código 27. En esos documentos no se
+muestran los botones ni el plazo, porque el acuse de recibo de la Ley 19.983
+aplica a las ventas a crédito.
+
+El plazo mostrado es **estimado**: se calcula desde la fecha de emisión, porque
+la librería no consulta la fecha de recepción en el SII. Como la emisión es
+igual o anterior a la recepción, el plazo real nunca es más corto que el mostrado.
+
+## Pendiente
+
+- Respuestas comerciales por correo en XML (`RespuestaDTE`), opcionales: la
+  aceptación y el reclamo con efecto legal se registran en el SII.
+- Consulta de la fecha exacta de recepción en el SII, para mostrar el plazo real.
 
 ## Configuración del correo
 
@@ -74,9 +98,11 @@ envía el correo dentro de los 15 minutos siguientes. El estado queda en la
 pestaña DTE de la factura.
 
 **Proveedores.** Los documentos llegan a *Facturación electrónica Chile >
-Documentos recibidos*. Ahí se revisa el detalle y, con un botón, se crea la
-factura de proveedor en borrador. Los sobres y sus respuestas quedan en
-*Sobres recibidos*.
+Documentos recibidos* (o se suben con *Cargar XML de proveedor*). Ahí se
+revisa el detalle, se crea la factura de proveedor en borrador y, dentro del
+plazo, se acepta o reclama en el SII. El filtro *Sin respuesta SII* muestra los
+documentos pendientes, y la columna del plazo se marca en rojo al vencer. Los
+sobres y sus respuestas de recepción quedan en *Sobres recibidos*.
 
 ## Licencia
 

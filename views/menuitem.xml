@@ -6,5 +6,7 @@
               parent="tf_dte_cl.menu_tf_dte_cl_root" action="action_tf_dte_cl_received" sequence="5"/>
     <menuitem id="menu_tf_dte_cl_exchange_envelope" name="Sobres recibidos"
               parent="tf_dte_cl.menu_tf_dte_cl_root" action="action_tf_dte_cl_exchange_envelope" sequence="6"/>
+    <menuitem id="menu_tf_dte_cl_received_upload" name="Cargar XML de proveedor"
+              parent="tf_dte_cl.menu_tf_dte_cl_root" action="action_tf_dte_cl_received_upload" sequence="7"/>
 
 </odoo>

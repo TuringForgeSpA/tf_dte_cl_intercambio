@@ -11,13 +11,17 @@ from __future__ import annotations
 
 import base64
 import logging
-from datetime import date
+from datetime import date, timedelta
+
+from lxml import etree
 
 from odoo import api, fields, models
 from odoo.exceptions import UserError
 
 from odoo.addons.tf_dte_cl.models.dte_lines import round_half_up
 from odoo.addons.tf_dte_cl.models.res_partner import normalize_rut
+
+from .sii_client import CLAIM_ACTIONS, CLAIM_DOCUMENT_TYPES
 
 _logger = logging.getLogger(__name__)
 
@@ -28,6 +32,28 @@ RECEIVED_STATES = [
 ]
 # Tipos que se registran; el resto del sobre se guarda igual pero no se factura.
 BILLABLE_TYPES = ('33', '34', '46', '56', '61')
+# Ley 19.983 (modificada por la Ley 20.956): 8 días corridos desde la recepción en el SII.
+CLAIM_DAYS = 8
+# FmaPago del DTE. El SII no admite eventos en documentos al contado o sin costo
+# (respuesta 27: "No se puede registrar un evento ... de un DTE pagado al contado o gratuito").
+PAYMENT_METHODS = [('1', 'Contado'), ('2', 'Crédito'), ('3', 'Sin costo (entrega gratuita)')]
+NO_CLAIM_PAYMENT_METHODS = ('1', '3')
+
+
+def payment_method_from_xml(raw: bytes) -> str | bool:
+    """Forma de pago (FmaPago) declarada en el XML de un DTE, o False si no la informa."""
+    if not raw:
+        return False
+    try:
+        root = etree.fromstring(raw, etree.XMLParser(resolve_entities=False, no_network=True))
+    except etree.XMLSyntaxError:
+        return False
+    for element in root.iter():
+        if isinstance(element.tag, str) and etree.QName(element).localname == 'FmaPago':
+            value = (element.text or '').strip()
+            return value if value in dict(PAYMENT_METHODS) else False
+    return False
+CLAIM_TYPES = [('RCD', CLAIM_ACTIONS['RCD']), ('RFP', CLAIM_ACTIONS['RFP']), ('RFT', CLAIM_ACTIONS['RFT'])]
 
 
 class TfDteClReceived(models.Model):
@@ -61,6 +87,27 @@ class TfDteClReceived(models.Model):
     move_id = fields.Many2one('account.move', string='Factura de proveedor', readonly=True, copy=False)
     line_ids = fields.One2many('tf_dte_cl.received.line', 'received_id', string='Detalle', readonly=True)
 
+    # Aceptación y reclamo ante el SII
+    payment_method = fields.Selection(
+        PAYMENT_METHODS, string='Forma de pago', compute='_compute_payment_method', store=True,
+        help='Forma de pago declarada en el DTE (FmaPago).',
+    )
+    # Almacenado: se usa en el dominio del filtro "Sin respuesta SII".
+    sii_claimable = fields.Boolean(
+        string='Admite aceptación o reclamo', compute='_compute_sii_claimable', store=True,
+    )
+    sii_deadline = fields.Date(
+        string='Plazo SII (estimado)', compute='_compute_sii_deadline', store=True,
+        help='8 días corridos desde la recepción en el SII. Se calcula desde la fecha de emisión, que es '
+             'igual o anterior a la recepción, por lo que el plazo real nunca es más corto que este.',
+    )
+    sii_accepted = fields.Boolean(string='Contenido aceptado', readonly=True, copy=False)
+    sii_receipt = fields.Boolean(string='Acuse de recibo otorgado', readonly=True, copy=False)
+    sii_claim = fields.Selection(CLAIM_TYPES, string='Reclamo', readonly=True, copy=False)
+    sii_message = fields.Char(string='Respuesta del SII', readonly=True, copy=False)
+    sii_events = fields.Text(string='Eventos en el SII', readonly=True, copy=False)
+    sii_last_query = fields.Datetime(string='Última consulta SII', readonly=True, copy=False)
+
     _sql_constraints = [
         ('document_uniq', 'unique(company_id, issuer_vat, document_type, folio)',
          'Ese documento del proveedor ya está registrado.'),
@@ -77,6 +124,105 @@ class TfDteClReceived(models.Model):
     def _compute_display_reference(self):
         for received in self:
             received.display_reference = 'T%sF%s' % (received.document_type or '?', received.folio or 0)
+
+    @api.depends('xml_file')
+    def _compute_payment_method(self):
+        for received in self:
+            xml = received.with_context(bin_size=False).xml_file
+            received.payment_method = payment_method_from_xml(base64.b64decode(xml)) if xml else False
+
+    @api.depends('document_type', 'payment_method')
+    def _compute_sii_claimable(self):
+        for received in self:
+            received.sii_claimable = (
+                received.document_type in CLAIM_DOCUMENT_TYPES
+                and received.payment_method not in NO_CLAIM_PAYMENT_METHODS
+            )
+
+    @api.depends('date', 'sii_claimable')
+    def _compute_sii_deadline(self):
+        for received in self:
+            received.sii_deadline = (
+                received.sii_claimable and received.date and received.date + timedelta(days=CLAIM_DAYS)
+            ) or False
+
+    # ------------------------------------------------------------------
+    # Aceptación y reclamo ante el SII
+    # ------------------------------------------------------------------
+    def _tf_dte_cl_claim_payload(self, action: str | None = None) -> dict:
+        self.ensure_one()
+        claim = {'RUTEmisor': normalize_rut(self.issuer_vat), 'TipoDTE': self.document_type, 'Folio': self.folio}
+        if action:
+            claim['Claim'] = action
+        return dict(self._tf_dte_cl_base_payload(self.company_id), DTEClaim=[claim])
+
+    def _tf_dte_cl_register_action(self, action: str) -> dict:
+        """Registra una acción en el SII y deja constancia; lanza UserError si falla."""
+        self.ensure_one()
+        if not self.sii_claimable:
+            if self.payment_method in NO_CLAIM_PAYMENT_METHODS:
+                raise UserError(self.env._(
+                    '%s fue emitida al contado o sin costo: el SII no admite aceptarla ni reclamarla.',
+                    self.display_reference,
+                ))
+            raise UserError(self.env._(
+                'El SII solo registra aceptaciones y reclamos de facturas (33, 34 y 43).'
+            ))
+        result = self.env['tf_dte_cl.sii.client'].tf_dte_cl_register_claim(self._tf_dte_cl_claim_payload(action))
+        message = '%s: %s' % (result.get('code'), result.get('description') or '')
+        self.sii_message = message
+        if not result['ok']:
+            hint = self.env._(' Reintente más tarde.') if result.get('transient') else ''
+            raise UserError(self.env._(
+                'El SII no registró "%(action)s" para %(doc)s: %(msg)s%(hint)s',
+                action=CLAIM_ACTIONS[action], doc=self.display_reference, msg=message, hint=hint,
+            ))
+        vals = {'ACD': {'sii_accepted': True}, 'ERM': {'sii_receipt': True}}.get(action, {'sii_claim': action})
+        self.write(vals)
+        self.message_post(body=self.env._('Registrado en el SII: %(action)s (%(msg)s).',
+                                          action=CLAIM_ACTIONS[action], msg=message))
+        return result
+
+    def action_tf_dte_cl_accept(self):
+        """Acepta el contenido y otorga el acuse de recibo (ACD y luego ERM)."""
+        for received in self:
+            if received.sii_claim:
+                raise UserError(self.env._('%s ya fue reclamado; no se puede aceptar.', received.display_reference))
+            if not received.sii_accepted:
+                received._tf_dte_cl_register_action('ACD')
+            if not received.sii_receipt:
+                received._tf_dte_cl_register_action('ERM')
+        return True
+
+    def action_tf_dte_cl_open_claim(self):
+        return {
+            'type': 'ir.actions.act_window',
+            'name': self.env._('Reclamar documento'),
+            'res_model': 'tf_dte_cl.received.claim',
+            'view_mode': 'form',
+            'target': 'new',
+            'context': {'default_received_ids': self.ids},
+        }
+
+    def action_tf_dte_cl_query_sii(self):
+        """Consulta en el SII los eventos del documento y actualiza su estado."""
+        client = self.env['tf_dte_cl.sii.client']
+        for received in self.filtered('sii_claimable'):
+            result = client.tf_dte_cl_claim_history(received._tf_dte_cl_claim_payload())
+            vals = {'sii_last_query': fields.Datetime.now(),
+                    'sii_message': '%s: %s' % (result.get('code'), result.get('description') or '')}
+            if result['ok']:
+                codes = {event['code'] for event in result['events']}
+                vals['sii_events'] = '\n'.join(
+                    '%(date)s  %(code)s  %(description)s  (%(rut)s)' % event for event in result['events']
+                ) or False
+                vals['sii_accepted'] = received.sii_accepted or 'ACD' in codes
+                vals['sii_receipt'] = received.sii_receipt or 'ERM' in codes
+                claimed = [code for code in ('RCD', 'RFP', 'RFT') if code in codes]
+                if claimed:
+                    vals['sii_claim'] = claimed[0]
+            received.write(vals)
+        return True
 
     # ------------------------------------------------------------------
     # Registro
@@ -237,3 +383,32 @@ class TfDteClReceivedLine(models.Model):
     price_unit = fields.Float(string='Precio unitario', digits='Product Price')
     amount = fields.Integer(string='Monto')
     is_exempt = fields.Boolean(string='Exento')
+
+
+class TfDteClReceivedClaim(models.TransientModel):
+    _name = 'tf_dte_cl.received.claim'
+    _description = 'Reclamo de un documento recibido'
+
+    received_ids = fields.Many2many('tf_dte_cl.received', string='Documentos')
+    claim_type = fields.Selection(CLAIM_TYPES, string='Tipo de reclamo', required=True, default='RCD')
+    reason = fields.Text(
+        string='Motivo', required=True,
+        help='No se envía al SII (el servicio no recibe un motivo): queda registrado en el historial del documento.',
+    )
+
+    def action_claim(self):
+        self.ensure_one()
+        for received in self.received_ids:
+            if received.sii_accepted or received.sii_receipt:
+                raise UserError(self.env._(
+                    '%s ya fue aceptado o tiene acuse de recibo; el SII no permite reclamarlo.',
+                    received.display_reference,
+                ))
+            received._tf_dte_cl_register_action(self.claim_type)
+            received.message_post(body=self.env._('Motivo del reclamo: %s', self.reason))
+            if received.move_id:
+                received.move_id.message_post(body=self.env._(
+                    'El documento de origen fue reclamado ante el SII (%(type)s): %(reason)s',
+                    type=dict(CLAIM_TYPES)[self.claim_type], reason=self.reason,
+                ))
+        return {'type': 'ir.actions.act_window_close'}

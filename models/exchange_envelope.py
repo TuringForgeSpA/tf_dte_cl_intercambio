@@ -19,6 +19,7 @@ from lxml import etree
 from psycopg2 import OperationalError
 
 from odoo import api, fields, models
+from odoo.exceptions import UserError
 
 from odoo.addons.tf_dte_cl.models.res_partner import normalize_rut
 
@@ -28,6 +29,7 @@ SII_NS = 'http://www.sii.cl/SiiDte'
 ENVELOPE_STATES = [
     ('received', 'Recibido'),
     ('answered', 'Recepción respondida'),
+    ('no_reception', 'Sin respuesta de recepción'),
     ('rejected', 'Rechazado'),
     ('error', 'Error'),
 ]
@@ -48,10 +50,44 @@ def _amount(node, path: str) -> int:
         return 0
 
 
-def parse_envelope(raw: bytes) -> dict:
-    """Lee un EnvioDTE recibido y devuelve su carátula y sus documentos.
+def _global_adjustments(document, lines: list[dict]) -> list[dict]:
+    """Descuentos y recargos globales (DscRcgGlobal) como líneas adicionales.
 
-    No depende de Odoo. Lanza ``ValueError`` si el archivo no es un EnvioDTE.
+    TpoMov D = descuento (resta), R = recargo (suma). TpoValor $ = monto,
+    % = porcentaje sobre las líneas afectas (o exentas si IndExeDR = 1).
+    IndExeDR = 2 (no facturable) no afecta los totales y se omite.
+    """
+    adjustments = []
+    for node in document.findall('DscRcgGlobal'):
+        exempt_flag = _text(node, 'IndExeDR')
+        if exempt_flag == '2':
+            continue
+        is_exempt = exempt_flag == '1'
+        value = float(_text(node, 'ValorDR') or 0)
+        if _text(node, 'TpoValor') == '%':
+            base = sum(line['amount'] for line in lines if line['is_exempt'] == is_exempt)
+            value = base * value / 100.0
+        amount = int(round(value))
+        if _text(node, 'TpoMov') == 'D':
+            amount = -amount
+        if not amount:
+            continue
+        label = _text(node, 'GlosaDR') or ('Descuento global' if amount < 0 else 'Recargo global')
+        adjustments.append({
+            'name': label, 'description': '', 'quantity': 1.0,
+            'price_unit': float(amount), 'amount': amount, 'is_exempt': is_exempt,
+        })
+    return adjustments
+
+
+def parse_envelope(raw: bytes) -> dict:
+    """Lee un archivo con uno o más DTE y devuelve su carátula (si la hay) y sus documentos.
+
+    Acepta el sobre EnvioDTE estándar, un DTE suelto o un envoltorio de un
+    proveedor de facturación (por ejemplo, el <Document> de Acepta). Sin
+    carátula no se puede generar la respuesta de recepción, pero los
+    documentos se registran igual. No depende de Odoo; lanza ``ValueError``
+    si el archivo no contiene ningún DTE.
     """
     parser = etree.XMLParser(resolve_entities=False, no_network=True)
     try:
@@ -63,23 +99,24 @@ def parse_envelope(raw: bytes) -> dict:
         if isinstance(element.tag, str) and element.tag.startswith('{%s}' % SII_NS):
             element.tag = etree.QName(element).localname
     etree.cleanup_namespaces(root)
-    if root.tag != 'EnvioDTE':
-        raise ValueError('El archivo no es un sobre EnvioDTE.')
-    set_dte = root.find('SetDTE')
-    caratula = set_dte.find('Caratula') if set_dte is not None else None
-    if caratula is None:
-        raise ValueError('El sobre no tiene carátula.')
+
+    dtes = [root] if root.tag == 'DTE' else root.findall('.//DTE')
+    if not dtes:
+        raise ValueError('El archivo no contiene ningún DTE.')
+    caratula = root.find('SetDTE/Caratula') if root.tag == 'EnvioDTE' else None
+    set_dte = root.find('SetDTE') if root.tag == 'EnvioDTE' else None
 
     documents = []
-    for dte in set_dte.findall('DTE'):
-        header = dte.find('Documento/Encabezado')
+    for dte in dtes:
+        document = dte.find('Documento')
+        header = document.find('Encabezado') if document is not None else None
         if header is None:
             continue
         id_doc, issuer, receiver, totals = (
             header.find('IdDoc'), header.find('Emisor'), header.find('Receptor'), header.find('Totales'),
         )
         lines = []
-        for detail in dte.findall('Documento/Detalle'):
+        for detail in document.findall('Detalle'):
             quantity = float(_text(detail, 'QtyItem') or 1)
             lines.append({
                 'name': _text(detail, 'NmbItem'),
@@ -89,6 +126,7 @@ def parse_envelope(raw: bytes) -> dict:
                 'amount': _amount(detail, 'MontoItem'),
                 'is_exempt': bool(_text(detail, 'IndExe')),
             })
+        lines += _global_adjustments(document, lines)
         documents.append({
             'document_type': _text(id_doc, 'TipoDTE'),
             'folio': _text(id_doc, 'Folio'),
@@ -108,11 +146,13 @@ def parse_envelope(raw: bytes) -> dict:
             'lines': lines,
         })
     if not documents:
-        raise ValueError('El sobre no contiene documentos.')
+        raise ValueError('El archivo no contiene documentos legibles.')
+    first = documents[0]
     return {
-        'issuer_vat': normalize_rut(_text(caratula, 'RutEmisor')),
-        'receiver_vat': normalize_rut(_text(caratula, 'RutReceptor')),
-        'set_id': set_dte.get('ID') or '',
+        'has_caratula': caratula is not None,
+        'issuer_vat': normalize_rut(_text(caratula, 'RutEmisor')) if caratula is not None else first['issuer_vat'],
+        'receiver_vat': normalize_rut(_text(caratula, 'RutReceptor')) if caratula is not None else first['receiver_vat'],
+        'set_id': (set_dte.get('ID') or '') if set_dte is not None else '',
         'documents': documents,
     }
 
@@ -191,7 +231,25 @@ class TfDteClExchangeEnvelope(models.Model):
         envelope = self.create(dict(
             values, company_id=company.id, issuer_vat=data['issuer_vat'],
             set_id=data['set_id'], partner_id=partner.id or False,
+            # Sin carátula (DTE suelto o envoltorio de un proveedor) no se puede
+            # generar la respuesta de recepción: cita el ID y la firma del sobre.
+            state='received' if data['has_caratula'] else 'no_reception',
         ))
+        duplicates = self.env['tf_dte_cl.received'].search([
+            ('company_id', '=', company.id),
+            ('issuer_vat', 'in', [d['issuer_vat'] for d in data['documents']]),
+        ])
+        known = {(r.issuer_vat, r.document_type, r.folio) for r in duplicates}
+        new_documents = [
+            d for d in data['documents']
+            if (d['issuer_vat'], d['document_type'], int(d['folio'] or 0)) not in known
+        ]
+        if len(new_documents) < len(data['documents']):
+            envelope.message_post(body=self.env._(
+                'Se omitieron %s documento(s) que ya estaban registrados.',
+                len(data['documents']) - len(new_documents),
+            ))
+        data['documents'] = new_documents
         envelope.received_ids = [
             fields.Command.create(self.env['tf_dte_cl.received']._tf_dte_cl_values(document, envelope))
             for document in data['documents']
@@ -319,4 +377,31 @@ class TfDteClExchangeEnvelope(models.Model):
             'res_model': 'tf_dte_cl.received',
             'view_mode': 'list,form',
             'domain': [('envelope_id', '=', self.id)],
+        }
+
+
+class TfDteClReceivedUpload(models.TransientModel):
+    _name = 'tf_dte_cl.received.upload'
+    _description = 'Carga manual de un XML de proveedor'
+
+    xml_file = fields.Binary(string='Archivo XML', attachment=False)
+    xml_filename = fields.Char(string='Nombre del archivo')
+
+    def action_upload(self):
+        self.ensure_one()
+        if not self.xml_file:
+            raise UserError(self.env._('Adjunte el archivo XML del documento.'))
+        envelope = self.env['tf_dte_cl.exchange.envelope']._tf_dte_cl_register(
+            base64.b64decode(self.xml_file), self.xml_filename or 'documento.xml',
+        )
+        if envelope.state == 'error' or envelope.state == 'rejected':
+            raise UserError(envelope.error)
+        if not envelope.received_ids:
+            raise UserError(self.env._('Los documentos del archivo ya estaban registrados.'))
+        return {
+            'type': 'ir.actions.act_window',
+            'name': self.env._('Documentos recibidos'),
+            'res_model': 'tf_dte_cl.received',
+            'view_mode': 'list,form',
+            'domain': [('envelope_id', '=', envelope.id)],
         }
