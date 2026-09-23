@@ -1,26 +1,37 @@
 # tf_dte_cl_intercambio — Intercambio de DTE con clientes y proveedores
 
-Complemento de [`tf_dte_cl`](https://github.com/TuringForgeSpA/tf_dte_cl) para el **intercambio**: el canal
+Complemento de [`tf_dte_cl`](../tf_dte_cl) para el **intercambio**: el canal
 entre emisor y receptor, distinto del envío al SII, normado por la Res. Ex. SII
 N° 45 de 2003 y la Ley 19.983.
 
 ## Alcance actual
 
 **Como emisor**
-
 - Arma un segundo sobre `EnvioDTE` dirigido al cliente (con su RUT en la carátula).
 - Lo envía por correo con el XML y el PDF, una vez que el SII acepta el
   documento y solo a clientes con **correo de intercambio**.
 - Botón para reenviar manualmente y estado visible en la factura.
+- **Respuesta del cliente en el SII**: en facturas 33 y 34 a crédito, un
+  proceso cada 4 horas consulta los eventos que el cliente registró en el SII
+  mientras corre su plazo de 8 días (más 2 días de margen, porque el plazo real
+  corre desde la recepción en el SII). La factura muestra si fue aceptada, tiene
+  acuse de recibo, fue **reclamada** o quedó con acuse presunto. Un reclamo
+  genera un mensaje y una actividad para el vendedor, porque corresponde revisar
+  el caso y, si procede, emitir una nota de crédito. Filtro *Reclamadas por el
+  cliente* en la lista de facturas.
+- **Respuestas del cliente por correo** (`RespuestaDTE` y `EnvioRecibos`): se
+  reconocen en la casilla de intercambio y se informan en la factura referida.
+  Son informativas: el efecto legal es el del registro en el SII.
 
 **Como receptor**
-
 - Recibe los documentos por correo en una casilla dedicada, o por carga manual,
   y registra cada uno. Lee el sobre `EnvioDTE` estándar, un DTE suelto o el
   envoltorio propio de un proveedor de facturación (por ejemplo, Acepta).
 - Responde automáticamente la **recepción del envío** cuando el archivo es un
   sobre con carátula. Los formatos sin carátula no admiten esta respuesta,
   porque cita el ID y la firma del sobre.
+- Si un archivo solo trae documentos ya registrados (por ejemplo, un reenvío),
+  no se vuelve a responder la recepción.
 - Botón **Crear factura de proveedor**: deja un borrador con una línea por cada
   detalle del XML, con la descripción del proveedor sobre un producto genérico,
   el impuesto de compra en las líneas afectas y ninguno en las exentas. Los
@@ -36,11 +47,11 @@ ese plazo, se presume otorgado el acuse de recibo. El registro se hace con el
 servicio web del SII *Consulta y Registro de Aceptación/Reclamo a DTE recibido*
 (v1.2), que solo opera con facturas (33, 34 y 43).
 
-| Botón                  | Acciones en el SII                                                                                                          |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Aceptar en el SII**  | `ACD` (acepta el contenido) y `ERM` (otorga el acuse de recibo)                                                             |
+| Botón | Acciones en el SII |
+|---|---|
+| **Aceptar en el SII** | `ACD` (acepta el contenido) y `ERM` (otorga el acuse de recibo) |
 | **Reclamar en el SII** | `RCD` (reclamo al contenido), `RFP` o `RFT` (falta parcial o total de mercaderías), con un motivo que queda en el historial |
-| **Consultar SII**      | Trae los eventos registrados y actualiza el estado del documento                                                            |
+| **Consultar SII** | Trae los eventos registrados y actualiza el estado del documento |
 
 El SII no permite aceptar un documento reclamado ni reclamar uno aceptado o con
 acuse de recibo; los botones se ocultan según el último evento.
@@ -85,10 +96,10 @@ se pierde si falla el procesamiento.
 
 En *Contabilidad > Ajustes > Facturación electrónica Chile*:
 
-| Ajuste                             | Para qué                                                            |
-| ---------------------------------- | ------------------------------------------------------------------- |
-| Enviar el DTE al receptor          | Activa el envío automático a los clientes con correo de intercambio |
-| Producto para documentos recibidos | Producto genérico de las líneas de las facturas de proveedor        |
+| Ajuste | Para qué |
+|---|---|
+| Enviar el DTE al receptor | Activa el envío automático a los clientes con correo de intercambio |
+| Producto para documentos recibidos | Producto genérico de las líneas de las facturas de proveedor |
 
 En los contactos, el campo **Correo de intercambio DTE** define a quién se le
 envía y desde dónde se espera recibir.

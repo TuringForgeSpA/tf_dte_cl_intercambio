@@ -30,6 +30,7 @@ ENVELOPE_STATES = [
     ('received', 'Recibido'),
     ('answered', 'Recepción respondida'),
     ('no_reception', 'Sin respuesta de recepción'),
+    ('client_response', 'Respuesta de un cliente'),
     ('rejected', 'Rechazado'),
     ('error', 'Error'),
 ]
@@ -157,6 +158,58 @@ def parse_envelope(raw: bytes) -> dict:
     }
 
 
+# Estados de la respuesta comercial (RespuestaDTE/ResultadoDTE/EstadoDTE).
+COMMERCIAL_STATES = {'0': 'Aceptado', '1': 'Aceptado con discrepancias', '2': 'Rechazado'}
+RESPONSE_ROOTS = ('RespuestaDTE', 'EnvioRecibos')
+
+
+def _strip_namespaces(root) -> None:
+    for element in root.iter():
+        if isinstance(element.tag, str) and element.tag.startswith('{'):
+            element.tag = etree.QName(element).localname
+    etree.cleanup_namespaces(root)
+
+
+def parse_response(raw: bytes) -> dict | None:
+    """Lee una respuesta de intercambio enviada por un cliente.
+
+    Devuelve ``None`` si el archivo no es una respuesta (RespuestaDTE o
+    EnvioRecibos). No depende de Odoo.
+    """
+    try:
+        root = etree.fromstring(raw, etree.XMLParser(resolve_entities=False, no_network=True))
+    except etree.XMLSyntaxError:
+        return None
+    _strip_namespaces(root)
+    if root.tag not in RESPONSE_ROOTS:
+        return None
+    items = []
+    if root.tag == 'EnvioRecibos':
+        for receipt in root.iter('DocumentoRecibo'):
+            items.append({
+                'kind': 'goods', 'document_type': _text(receipt, 'TipoDoc'), 'folio': _text(receipt, 'Folio'),
+                'issuer_vat': normalize_rut(_text(receipt, 'RUTEmisor')),
+                'summary': 'Acuse de recibo de mercaderías o servicios (recinto: %s)' % (
+                    _text(receipt, 'Recinto') or '-'),
+            })
+    else:
+        for result in root.iter('ResultadoDTE'):
+            state = _text(result, 'EstadoDTE')
+            items.append({
+                'kind': 'commercial', 'document_type': _text(result, 'TipoDTE'), 'folio': _text(result, 'Folio'),
+                'issuer_vat': normalize_rut(_text(result, 'RUTEmisor')),
+                'summary': 'Respuesta comercial: %s. %s' % (
+                    COMMERCIAL_STATES.get(state, state), _text(result, 'EstadoDTEGlosa')),
+            })
+        for reception in root.iter('RecepcionDTE'):
+            items.append({
+                'kind': 'reception', 'document_type': _text(reception, 'TipoDTE'),
+                'folio': _text(reception, 'Folio'), 'issuer_vat': normalize_rut(_text(reception, 'RUTEmisor')),
+                'summary': 'Recepción del envío: %s' % (_text(reception, 'RecepDTEGlosa') or '-'),
+            })
+    return {'root': root.tag, 'items': items}
+
+
 class TfDteClExchangeEnvelope(models.Model):
     _name = 'tf_dte_cl.exchange.envelope'
     _description = 'Sobre DTE recibido'
@@ -179,6 +232,8 @@ class TfDteClExchangeEnvelope(models.Model):
     response_date = fields.Datetime(string='Respondido el', readonly=True)
     response_glosa = fields.Char(string='Glosa de recepción', readonly=True)
     error = fields.Text(string='Mensaje', readonly=True)
+    response_summary = fields.Text(string='Contenido de la respuesta', readonly=True)
+    response_move_ids = fields.Many2many('account.move', string='Facturas referidas', readonly=True)
     received_ids = fields.One2many('tf_dte_cl.received', 'envelope_id', string='Documentos')
     received_count = fields.Integer(compute='_compute_received_count')
 
@@ -214,6 +269,9 @@ class TfDteClExchangeEnvelope(models.Model):
         """Registra un sobre recibido y sus documentos."""
         values = dict(custom_values or {}, name=filename, xml_filename=filename,
                       xml_file=base64.b64encode(content))
+        response = parse_response(content)
+        if response is not None:
+            return self._tf_dte_cl_register_client_response(response, values)
         try:
             data = parse_envelope(content)
         except ValueError as error:
@@ -249,11 +307,43 @@ class TfDteClExchangeEnvelope(models.Model):
                 'Se omitieron %s documento(s) que ya estaban registrados.',
                 len(data['documents']) - len(new_documents),
             ))
+        if not new_documents and envelope.state == 'received':
+            # Reenvío de documentos ya registrados: no se responde otra vez la recepción.
+            envelope.state = 'no_reception'
         data['documents'] = new_documents
         envelope.received_ids = [
             fields.Command.create(self.env['tf_dte_cl.received']._tf_dte_cl_values(document, envelope))
             for document in data['documents']
         ]
+        return envelope
+
+    @api.model
+    def _tf_dte_cl_register_client_response(self, response: dict, values: dict):
+        """Registra una respuesta de un cliente y la informa en las facturas referidas."""
+        moves = self.env['account.move']
+        lines = []
+        for item in response['items']:
+            company = self.env['res.company'].search([('vat', '=', item['issuer_vat'])], limit=1)
+            move = self.env['account.move'].search([
+                ('company_id', '=', company.id),
+                ('tf_dte_cl_document_type', '=', item['document_type']),
+                ('tf_dte_cl_folio', '=', int(item['folio'] or 0)),
+            ], limit=1) if company else self.env['account.move']
+            lines.append('T%sF%s: %s' % (item['document_type'], item['folio'], item['summary']))
+            if move:
+                moves |= move
+                previous = move.tf_dte_cl_client_mail_response
+                move.tf_dte_cl_client_mail_response = '\n'.join(filter(None, [previous, item['summary']]))
+                move.message_post(body=self.env._('Respuesta del cliente por correo: %s', item['summary']))
+        envelope = self.create(dict(
+            values, state='client_response', company_id=(moves[:1].company_id or self.env.company).id,
+            response_summary='\n'.join(lines) or self.env._('La respuesta no refiere documentos.'),
+            response_move_ids=[fields.Command.set(moves.ids)],
+        ))
+        if len(moves) < len(response['items']):
+            envelope.message_post(body=self.env._(
+                'Algunos documentos de la respuesta no corresponden a facturas emitidas en Odoo.'
+            ))
         return envelope
 
     # ------------------------------------------------------------------

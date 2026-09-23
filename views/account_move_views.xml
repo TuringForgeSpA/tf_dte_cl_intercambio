@@ -18,6 +18,44 @@
                             string="Enviar al receptor" icon="fa-envelope-o"
                             invisible="tf_dte_cl_state not in ('accepted', 'accepted_objections')"/>
                 </group>
+                <group string="Respuesta del cliente"
+                       invisible="move_type != 'out_invoice' or tf_dte_cl_document_type not in ('33', '34')">
+                    <field name="tf_dte_cl_client_state" decoration-danger="tf_dte_cl_client_state == 'claimed'"/>
+                    <field name="tf_dte_cl_client_claim" invisible="not tf_dte_cl_client_claim"/>
+                    <field name="tf_dte_cl_client_deadline"/>
+                    <field name="tf_dte_cl_client_last_query"/>
+                    <field name="tf_dte_cl_client_message"/>
+                    <field name="tf_dte_cl_client_events" invisible="not tf_dte_cl_client_events"/>
+                    <field name="tf_dte_cl_client_mail_response" invisible="not tf_dte_cl_client_mail_response"/>
+                    <button name="action_tf_dte_cl_query_client_events" type="object" class="btn-link"
+                            string="Consultar eventos del cliente" icon="fa-refresh"
+                            invisible="tf_dte_cl_state not in ('accepted', 'accepted_objections')"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_invoice_tree_tf_dte_cl_intercambio" model="ir.ui.view">
+        <field name="name">account.move.list.tf_dte_cl_intercambio</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="tf_dte_cl.view_invoice_tree_tf_dte_cl"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='tf_dte_cl_state']" position="after">
+                <field name="tf_dte_cl_client_state" optional="show" widget="badge"
+                       decoration-success="tf_dte_cl_client_state in ('accepted', 'receipt', 'presumed')"
+                       decoration-danger="tf_dte_cl_client_state == 'claimed'"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_account_invoice_filter_tf_dte_cl_intercambio" model="ir.ui.view">
+        <field name="name">account.move.search.tf_dte_cl_intercambio</field>
+        <field name="model">account.move</field>
+        <field name="inherit_id" ref="tf_dte_cl.view_account_invoice_filter_tf_dte_cl"/>
+        <field name="arch" type="xml">
+            <xpath expr="//filter[@name='tf_dte_cl_problems']" position="after">
+                <filter name="tf_dte_cl_client_claimed" string="Reclamadas por el cliente"
+                        domain="[('tf_dte_cl_client_state', '=', 'claimed')]"/>
             </xpath>
         </field>
     </record>
