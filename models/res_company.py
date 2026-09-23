@@ -21,3 +21,13 @@ class ResCompany(models.Model):
         help='Producto usado en las líneas de las facturas de proveedor creadas desde un DTE recibido; '
              'la descripción es la del proveedor.',
     )
+    tf_dte_cl_exchange_alert_days = fields.Integer(
+        string='Aviso de plazo (días antes)', default=2,
+        help='Días antes del vencimiento del plazo de 8 días en que se avisa de una factura recibida '
+             'sin aceptación ni reclamo en el SII.',
+    )
+    tf_dte_cl_exchange_responsible_id = fields.Many2one(
+        'res.users', string='Responsable de documentos recibidos',
+        help='Recibe el aviso de plazo cuando el documento aún no tiene factura de proveedor. Si ya la '
+             'tiene, el aviso va al usuario que la creó.',
+    )

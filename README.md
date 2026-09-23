@@ -32,6 +32,20 @@ N° 45 de 2003 y la Ley 19.983.
   porque cita el ID y la firma del sobre.
 - Si un archivo solo trae documentos ya registrados (por ejemplo, un reenvío),
   no se vuelve a responder la recepción.
+- **Verificación en el SII**: cada documento se consulta en el SII (consulta de
+  estado de DTE) para confirmar que existe y que sus datos coinciden. La
+  librería no valida la firma de los documentos recibidos, así que esta
+  consulta es la que protege de un XML adulterado o inventado.
+
+  | Resultado | Factura de proveedor |
+  |---|---|
+  | Verificado (`DOK`) | Se crea normalmente |
+  | Datos no coinciden (`DNK`) o modificado por una nota | Se crea con aviso |
+  | No recibido por el SII (`FAU`) | Bloqueada; se reintenta durante 10 días desde la emisión |
+  | Emisor no autorizado o documento anulado | Bloqueada |
+
+  Un proceso cada 30 minutos verifica los documentos pendientes, y hay un botón
+  **Verificar en el SII** en cada uno.
 - Botón **Crear factura de proveedor**: deja un borrador con una línea por cada
   detalle del XML, con la descripción del proveedor sobre un producto genérico,
   el impuesto de compra en las líneas afectas y ninguno en las exentas. Los
@@ -60,6 +74,13 @@ Tampoco admite eventos en facturas **al contado o sin costo** (forma de pago 1
 o 3 en el DTE): el SII responde con el código 27. En esos documentos no se
 muestran los botones ni el plazo, porque el acuse de recibo de la Ley 19.983
 aplica a las ventas a crédito.
+
+**Aviso de plazo.** Cuando a una factura a crédito recibida le quedan pocos días
+(2 por defecto) sin aceptación ni reclamo, se crea una actividad que vence el
+mismo día que el plazo. Se asigna al usuario que creó la factura de proveedor;
+si todavía no existe, al responsable de documentos recibidos definido en
+Ajustes, y si no hay, al administrador. La actividad se cierra sola cuando el
+documento se acepta o se reclama en el SII.
 
 El plazo mostrado es **estimado**: se calcula desde la fecha de emisión, porque
 la librería no consulta la fecha de recepción en el SII. Como la emisión es
@@ -100,6 +121,8 @@ En *Contabilidad > Ajustes > Facturación electrónica Chile*:
 |---|---|
 | Enviar el DTE al receptor | Activa el envío automático a los clientes con correo de intercambio |
 | Producto para documentos recibidos | Producto genérico de las líneas de las facturas de proveedor |
+| Responsable de documentos recibidos | Recibe el aviso de plazo de los documentos que aún no tienen factura de proveedor |
+| Aviso de plazo (días antes) | Anticipación del aviso; 2 por defecto |
 
 En los contactos, el campo **Correo de intercambio DTE** define a quién se le
 envía y desde dónde se espera recibir.

@@ -17,6 +17,16 @@
                                    class="col-lg-5 o_light_label"/>
                             <field name="tf_dte_cl_exchange_product_id" options="{'no_create': True}"/>
                         </div>
+                        <div class="row">
+                            <label for="tf_dte_cl_exchange_responsible_id" string="Responsable de documentos recibidos"
+                                   class="col-lg-5 o_light_label"/>
+                            <field name="tf_dte_cl_exchange_responsible_id" options="{'no_create': True}"/>
+                        </div>
+                        <div class="row">
+                            <label for="tf_dte_cl_exchange_alert_days" string="Aviso de plazo (días antes)"
+                                   class="col-lg-5 o_light_label"/>
+                            <field name="tf_dte_cl_exchange_alert_days"/>
+                        </div>
                     </div>
                     <div class="mt8">
                         <button name="%(tf_dte_cl_intercambio.action_tf_dte_cl_received)d" type="action"

@@ -15,3 +15,9 @@ class ResConfigSettings(models.TransientModel):
     tf_dte_cl_exchange_product_id = fields.Many2one(
         related='company_id.tf_dte_cl_exchange_product_id', readonly=False,
     )
+    tf_dte_cl_exchange_alert_days = fields.Integer(
+        related='company_id.tf_dte_cl_exchange_alert_days', readonly=False,
+    )
+    tf_dte_cl_exchange_responsible_id = fields.Many2one(
+        related='company_id.tf_dte_cl_exchange_responsible_id', readonly=False,
+    )

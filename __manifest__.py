@@ -4,7 +4,7 @@
     'summary': 'Envío del DTE al receptor y recepción de documentos de proveedores.',
     'description': 'Intercambio de documentos tributarios electrónicos con clientes y proveedores. '
                    'Ver README.md para la documentación completa.',
-    'version': '18.0.3.0.0',
+    'version': '18.0.5.0.0',
     'category': 'Accounting/Localizations/EDI',
     'license': 'LGPL-3',
     'author': 'TF',

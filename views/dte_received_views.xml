@@ -15,6 +15,10 @@
                 <field name="amount_total" sum="Total"/>
                 <field name="state" widget="badge" decoration-success="state == 'billed'"/>
                 <field name="sii_claimable" column_invisible="True"/>
+                <field name="sii_verify_state" optional="show" widget="badge"
+                       decoration-success="sii_verify_state == 'verified'"
+                       decoration-warning="sii_verify_state in ('mismatch', 'modified', 'error')"
+                       decoration-danger="sii_verify_state in ('not_found', 'unauthorized', 'annulled')"/>
                 <field name="payment_method" optional="show"/>
                 <field name="sii_deadline" optional="show"
                        decoration-danger="sii_claimable and not (sii_accepted or sii_receipt or sii_claim) and sii_deadline and sii_deadline &lt;= context_today().strftime('%Y-%m-%d')"/>
@@ -49,12 +53,26 @@
                             invisible="not sii_claimable or sii_claim or sii_accepted or sii_receipt"/>
                     <button name="action_tf_dte_cl_query_sii" type="object" string="Consultar SII"
                             invisible="not sii_claimable"/>
+                    <button name="action_tf_dte_cl_verify" type="object" string="Verificar en el SII"
+                            invisible="document_type not in ('33', '34', '52', '56', '61')"/>
                     <field name="state" widget="statusbar"/>
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
                         <button name="action_open_move" type="object" class="oe_stat_button"
                                 icon="fa-file-text-o" string="Factura" invisible="not move_id"/>
+                    </div>
+                    <div class="alert alert-danger" role="alert"
+                         invisible="sii_verify_state not in ('not_found', 'unauthorized', 'annulled')">
+                        <strong>El SII no respalda este documento: </strong>
+                        <field name="sii_verify_state" readonly="1" class="d-inline"/>.
+                        <field name="sii_verify_detail" readonly="1" class="d-inline"/>
+                        No se puede crear la factura de proveedor.
+                    </div>
+                    <div class="alert alert-warning" role="alert"
+                         invisible="sii_verify_state not in ('mismatch', 'modified')">
+                        <strong>Revise el documento: </strong>
+                        <field name="sii_verify_detail" readonly="1" class="d-inline"/>
                     </div>
                     <div class="oe_title">
                         <h1><field name="display_reference"/></h1>
@@ -74,6 +92,7 @@
                             <field name="date"/>
                             <field name="payment_method"/>
                             <field name="envelope_id"/>
+                            <field name="sii_verify_date"/>
                             <field name="move_id"/>
                             <field name="company_id" groups="base.group_multi_company"/>
                         </group>
@@ -143,6 +162,8 @@
                 <field name="issuer_vat"/>
                 <filter name="pending" string="Sin facturar" domain="[('state', '=', 'received')]"/>
                 <filter name="billed" string="Facturados" domain="[('state', '=', 'billed')]"/>
+                <filter name="sii_not_verified" string="No verificados en el SII"
+                        domain="[('sii_verify_state', '!=', 'verified')]"/>
                 <separator/>
                 <filter name="sii_pending" string="Sin respuesta SII"
                         domain="[('sii_claimable', '=', True), ('sii_accepted', '=', False), ('sii_receipt', '=', False), ('sii_claim', '=', False)]"/>

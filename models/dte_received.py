@@ -40,6 +40,39 @@ PAYMENT_METHODS = [('1', 'Contado'), ('2', 'Crédito'), ('3', 'Sin costo (entreg
 NO_CLAIM_PAYMENT_METHODS = ('1', '3')
 
 
+# Verificación del documento recibido con la consulta de estado de DTE del SII
+# (QueryEstDte, manual OI2004_CEDTE_MDE_1.10).
+VERIFY_STATES = [
+    ('verified', 'Verificado en el SII'),
+    ('mismatch', 'Datos no coinciden con el SII'),
+    ('modified', 'Modificado por una nota'),
+    ('not_found', 'No recibido por el SII'),
+    ('unauthorized', 'Emisor no autorizado'),
+    ('annulled', 'Anulado'),
+    ('error', 'Error de consulta'),
+]
+VERIFY_CODES = {
+    'DOK': 'verified', 'DNK': 'mismatch',
+    'TMD': 'modified', 'TMC': 'modified', 'MMD': 'modified', 'MMC': 'modified',
+    'FAU': 'not_found', 'FNA': 'unauthorized', 'EMP': 'unauthorized',
+    'FAN': 'annulled', 'AND': 'annulled', 'ANC': 'annulled',
+}
+# Estados que impiden crear la factura de proveedor.
+VERIFY_BLOCKING = ('not_found', 'unauthorized', 'annulled')
+# Estados que se vuelven a consultar, y hasta cuántos días desde la emisión.
+VERIFY_RETRY = (False, 'error', 'not_found')
+VERIFY_RETRY_DAYS = 10
+# Prefijo del resumen de las actividades de aviso de plazo (para cerrarlas solas).
+ALERT_PREFIX = 'Plazo SII por vencer:'
+# Tipos que admite la consulta del cliente SII de tf_dte_cl.
+VERIFIABLE_TYPES = ('33', '34', '52', '56', '61')
+
+
+def verify_state_from_code(code: str | None) -> str:
+    """Estado de verificación según el código de QueryEstDte. No depende de Odoo."""
+    return VERIFY_CODES.get(code or '', 'error')
+
+
 def payment_method_from_xml(raw: bytes) -> str | bool:
     """Forma de pago (FmaPago) declarada en el XML de un DTE, o False si no la informa."""
     if not raw:
@@ -59,7 +92,7 @@ CLAIM_TYPES = [('RCD', CLAIM_ACTIONS['RCD']), ('RFP', CLAIM_ACTIONS['RFP']), ('R
 class TfDteClReceived(models.Model):
     _name = 'tf_dte_cl.received'
     _description = 'Documento tributario recibido'
-    _inherit = ['mail.thread']
+    _inherit = ['mail.thread', 'mail.activity.mixin']
     _order = 'date desc, id desc'
     _rec_name = 'display_reference'
 
@@ -87,6 +120,12 @@ class TfDteClReceived(models.Model):
     move_id = fields.Many2one('account.move', string='Factura de proveedor', readonly=True, copy=False)
     line_ids = fields.One2many('tf_dte_cl.received.line', 'received_id', string='Detalle', readonly=True)
 
+    # Verificación en el SII
+    sii_verify_state = fields.Selection(VERIFY_STATES, string='Verificación SII', readonly=True, copy=False,
+                                        index=True)
+    sii_verify_detail = fields.Char(string='Detalle de la verificación', readonly=True, copy=False)
+    sii_verify_date = fields.Datetime(string='Verificado el', readonly=True, copy=False)
+
     # Aceptación y reclamo ante el SII
     payment_method = fields.Selection(
         PAYMENT_METHODS, string='Forma de pago', compute='_compute_payment_method', store=True,
@@ -107,6 +146,7 @@ class TfDteClReceived(models.Model):
     sii_message = fields.Char(string='Respuesta del SII', readonly=True, copy=False)
     sii_events = fields.Text(string='Eventos en el SII', readonly=True, copy=False)
     sii_last_query = fields.Datetime(string='Última consulta SII', readonly=True, copy=False)
+    sii_alert_sent = fields.Boolean(string='Aviso de plazo enviado', readonly=True, copy=False)
 
     _sql_constraints = [
         ('document_uniq', 'unique(company_id, issuer_vat, document_type, folio)',
@@ -147,6 +187,74 @@ class TfDteClReceived(models.Model):
             ) or False
 
     # ------------------------------------------------------------------
+    # Verificación en el SII
+    # ------------------------------------------------------------------
+    def _tf_dte_cl_verify_payload(self) -> dict:
+        """Consulta de estado de un DTE recibido: el emisor es el proveedor.
+
+        La librería toma el RUT del emisor del bloque Emisor y el RUT consultante
+        del certificado; el receptor (esta compañía) va en el documento.
+        """
+        self.ensure_one()
+        company = self.company_id
+        return {
+            'Emisor': {'RUTEmisor': normalize_rut(self.issuer_vat), 'Modo': company.tf_dte_cl_environment},
+            'firma_electronica': company._tf_dte_cl_signature_payload(),
+            'Documento': [{
+                'TipoDTE': int(self.document_type),
+                'documentos': [{
+                    'Folio': self.folio,
+                    'FchEmis': self.date,
+                    'Receptor': {'RUTRecep': normalize_rut(company.vat)},
+                    'MntTotal': self.amount_total,
+                }],
+            }],
+        }
+
+    def _tf_dte_cl_verify(self) -> str:
+        self.ensure_one()
+        if self.document_type not in VERIFIABLE_TYPES:
+            return self.sii_verify_state
+        result = self.env['tf_dte_cl.sii.client'].tf_dte_cl_query_document(self._tf_dte_cl_verify_payload())
+        state = verify_state_from_code(result.code) if result.ok else 'error'
+        previous = self.sii_verify_state
+        self.write({
+            'sii_verify_state': state,
+            'sii_verify_detail': ' '.join(filter(None, [result.code, result.detail]))[:250] or False,
+            'sii_verify_date': fields.Datetime.now(),
+        })
+        if state != previous and state not in ('error', 'verified'):
+            self.message_post(body=self.env._(
+                'Verificación en el SII: %(state)s. %(detail)s',
+                state=dict(VERIFY_STATES)[state], detail=self.sii_verify_detail or '',
+            ))
+        return state
+
+    def action_tf_dte_cl_verify(self):
+        for received in self:
+            received._tf_dte_cl_verify()
+        return True
+
+    @api.model
+    def _cron_tf_dte_cl_verify(self, limit=50):
+        """Verifica en el SII los documentos pendientes; "no recibido" se reintenta unos días."""
+        since = fields.Date.context_today(self) - timedelta(days=VERIFY_RETRY_DAYS)
+        documents = self.search([
+            ('sii_verify_state', 'in', list(VERIFY_RETRY)),
+            ('date', '>=', since),
+            ('document_type', 'in', list(VERIFIABLE_TYPES)),
+        ], order='sii_verify_date asc nulls first, id', limit=limit)
+        for document_id in documents.ids:
+            try:
+                with self.env.cr.savepoint():
+                    self.browse(document_id)._tf_dte_cl_verify()
+            except Exception:  # noqa: BLE001 - un documento no debe detener el lote
+                self.env.cr.rollback()
+                _logger.exception('Error al verificar en el SII el documento recibido %s', document_id)
+            if not self.env.registry.in_test_mode():
+                self.env.cr.commit()
+
+    # ------------------------------------------------------------------
     # Aceptación y reclamo ante el SII
     # ------------------------------------------------------------------
     def _tf_dte_cl_claim_payload(self, action: str | None = None) -> dict:
@@ -179,9 +287,71 @@ class TfDteClReceived(models.Model):
             ))
         vals = {'ACD': {'sii_accepted': True}, 'ERM': {'sii_receipt': True}}.get(action, {'sii_claim': action})
         self.write(vals)
+        self._tf_dte_cl_close_alert(self.env._('Registrado en el SII: %s.', CLAIM_ACTIONS[action]))
         self.message_post(body=self.env._('Registrado en el SII: %(action)s (%(msg)s).',
                                           action=CLAIM_ACTIONS[action], msg=message))
         return result
+
+    # ------------------------------------------------------------------
+    # Aviso de plazo
+    # ------------------------------------------------------------------
+    def _tf_dte_cl_alert_user(self):
+        """Creador de la factura de proveedor; si no la hay, el responsable de Ajustes; si no, el administrador."""
+        self.ensure_one()
+        bot = self.env.ref('base.user_root', raise_if_not_found=False)
+        creator = self.move_id.create_uid
+        if creator and creator != bot and creator.active:
+            return creator
+        responsible = self.company_id.tf_dte_cl_exchange_responsible_id
+        if responsible and responsible.active:
+            return responsible
+        return self.env.ref('base.user_admin')
+
+    def _tf_dte_cl_needs_answer(self) -> bool:
+        self.ensure_one()
+        return bool(self.sii_claimable and self.state != 'ignored'
+                    and not (self.sii_accepted or self.sii_receipt or self.sii_claim))
+
+    def _tf_dte_cl_close_alert(self, feedback: str) -> None:
+        todo = self.env.ref('mail.mail_activity_data_todo', raise_if_not_found=False)
+        for received in self:
+            activities = received.activity_ids.filtered(
+                lambda a: a.activity_type_id == todo and (a.summary or '').startswith(ALERT_PREFIX)
+            )
+            if activities:
+                activities.action_feedback(feedback=feedback)
+
+    @api.model
+    def _cron_tf_dte_cl_deadline_alerts(self):
+        """Crea una actividad por cada factura recibida cuyo plazo SII está por vencer sin respuesta."""
+        today = fields.Date.context_today(self)
+        for company in self.env['res.company'].search([]):
+            days = max(company.tf_dte_cl_exchange_alert_days, 0)
+            documents = self.search([
+                ('company_id', '=', company.id),
+                ('sii_claimable', '=', True),
+                ('sii_alert_sent', '=', False),
+                ('state', '!=', 'ignored'),
+                ('sii_accepted', '=', False), ('sii_receipt', '=', False), ('sii_claim', '=', False),
+                ('sii_deadline', '>=', today),
+                ('sii_deadline', '<=', today + timedelta(days=days)),
+            ])
+            for received in documents:
+                received.activity_schedule(
+                    'mail.mail_activity_data_todo',
+                    date_deadline=received.sii_deadline,
+                    summary='%s %s' % (ALERT_PREFIX, received.display_reference),
+                    note=self.env._(
+                        'El plazo para aceptar o reclamar %(doc)s de %(partner)s vence el %(date)s '
+                        '(estimado). Pasado ese plazo sin reclamo, el acuse de recibo se presume y ya no '
+                        'se puede reclamar.',
+                        doc=received.display_reference,
+                        partner=received.partner_id.display_name or received.issuer_name,
+                        date=received.sii_deadline,
+                    ),
+                    user_id=received._tf_dte_cl_alert_user().id,
+                )
+                received.sii_alert_sent = True
 
     def action_tf_dte_cl_accept(self):
         """Acepta el contenido y otorga el acuse de recibo (ACD y luego ERM)."""
@@ -222,6 +392,8 @@ class TfDteClReceived(models.Model):
                 if claimed:
                     vals['sii_claim'] = claimed[0]
             received.write(vals)
+            if not received._tf_dte_cl_needs_answer():
+                received._tf_dte_cl_close_alert(self.env._('Respuesta registrada en el SII.'))
         return True
 
     # ------------------------------------------------------------------
@@ -306,6 +478,12 @@ class TfDteClReceived(models.Model):
             raise UserError(self.env._(
                 'El documento %s no genera factura de proveedor.', self.document_type_name,
             ))
+        if self.sii_verify_state in VERIFY_BLOCKING:
+            raise UserError(self.env._(
+                'No se puede crear la factura de %(doc)s: %(state)s en el SII. %(detail)s',
+                doc=self.display_reference, state=dict(VERIFY_STATES)[self.sii_verify_state].lower(),
+                detail=self.sii_verify_detail or '',
+            ))
         company = self.company_id
         product = company.tf_dte_cl_exchange_product_id
         if not product:
@@ -331,6 +509,12 @@ class TfDteClReceived(models.Model):
         })
         self.write({'move_id': move.id, 'state': 'billed'})
         self._tf_dte_cl_attach_xml(move)
+        if self.sii_verify_state != 'verified':
+            move.message_post(body=self.env._(
+                'Atención: el documento de origen no está verificado en el SII (%s). '
+                'Revíselo antes de confirmar la factura.',
+                dict(VERIFY_STATES).get(self.sii_verify_state, self.env._('sin verificar')),
+            ))
         difference = round_half_up(move.amount_total) - self.amount_total
         if difference:
             body = self.env._(

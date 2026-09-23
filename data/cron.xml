@@ -30,5 +30,23 @@
         <field name="interval_type">hours</field>
         <field name="active">True</field>
     </record>
+    <record id="ir_cron_tf_dte_cl_verify_received" model="ir.cron">
+        <field name="name">DTE: verificar en el SII los documentos recibidos</field>
+        <field name="model_id" ref="model_tf_dte_cl_received"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_tf_dte_cl_verify()</field>
+        <field name="interval_number">30</field>
+        <field name="interval_type">minutes</field>
+        <field name="active">True</field>
+    </record>
+    <record id="ir_cron_tf_dte_cl_deadline_alerts" model="ir.cron">
+        <field name="name">DTE: avisar plazos de documentos recibidos</field>
+        <field name="model_id" ref="model_tf_dte_cl_received"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_tf_dte_cl_deadline_alerts()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active">True</field>
+    </record>
 
 </odoo>
