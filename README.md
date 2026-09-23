@@ -1,18 +1,20 @@
 # tf_dte_cl_intercambio — Intercambio de DTE con clientes y proveedores
 
-Complemento de [`tf_dte_cl`](../tf_dte_cl) para el **intercambio**: el canal
+Complemento de [`tf_dte_cl`](https://github.com/TuringForgeSpA/tf_dte_cl) para el **intercambio**: el canal
 entre emisor y receptor, distinto del envío al SII, normado por la Res. Ex. SII
 N° 45 de 2003 y la Ley 19.983.
 
 ## Alcance actual
 
 **Como emisor**
+
 - Arma un segundo sobre `EnvioDTE` dirigido al cliente (con su RUT en la carátula).
 - Lo envía por correo con el XML y el PDF, una vez que el SII acepta el
   documento y solo a clientes con **correo de intercambio**.
 - Botón para reenviar manualmente y estado visible en la factura.
 
 **Como receptor**
+
 - Recibe los documentos por correo en una casilla dedicada, o por carga manual,
   y registra cada uno. Lee el sobre `EnvioDTE` estándar, un DTE suelto o el
   envoltorio propio de un proveedor de facturación (por ejemplo, Acepta).
@@ -34,11 +36,11 @@ ese plazo, se presume otorgado el acuse de recibo. El registro se hace con el
 servicio web del SII *Consulta y Registro de Aceptación/Reclamo a DTE recibido*
 (v1.2), que solo opera con facturas (33, 34 y 43).
 
-| Botón | Acciones en el SII |
-|---|---|
-| **Aceptar en el SII** | `ACD` (acepta el contenido) y `ERM` (otorga el acuse de recibo) |
+| Botón                  | Acciones en el SII                                                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Aceptar en el SII**  | `ACD` (acepta el contenido) y `ERM` (otorga el acuse de recibo)                                                             |
 | **Reclamar en el SII** | `RCD` (reclamo al contenido), `RFP` o `RFT` (falta parcial o total de mercaderías), con un motivo que queda en el historial |
-| **Consultar SII** | Trae los eventos registrados y actualiza el estado del documento |
+| **Consultar SII**      | Trae los eventos registrados y actualiza el estado del documento                                                            |
 
 El SII no permite aceptar un documento reclamado ni reclamar uno aceptado o con
 acuse de recibo; los botones se ocultan según el último evento.
@@ -83,10 +85,10 @@ se pierde si falla el procesamiento.
 
 En *Contabilidad > Ajustes > Facturación electrónica Chile*:
 
-| Ajuste | Para qué |
-|---|---|
-| Enviar el DTE al receptor | Activa el envío automático a los clientes con correo de intercambio |
-| Producto para documentos recibidos | Producto genérico de las líneas de las facturas de proveedor |
+| Ajuste                             | Para qué                                                            |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| Enviar el DTE al receptor          | Activa el envío automático a los clientes con correo de intercambio |
+| Producto para documentos recibidos | Producto genérico de las líneas de las facturas de proveedor        |
 
 En los contactos, el campo **Correo de intercambio DTE** define a quién se le
 envía y desde dónde se espera recibir.
