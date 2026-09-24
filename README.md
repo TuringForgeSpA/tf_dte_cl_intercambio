@@ -143,3 +143,5 @@ sobres y sus respuestas de recepción quedan en *Sobres recibidos*.
 ## Licencia
 
 LGPL-3.
+
+© 2026 Turing Forge SpA. Distribuido bajo LGPL-3; vea los archivos `LICENSE` (LGPL-3) y `LICENSE.GPL` (GPL-3).
