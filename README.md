@@ -140,6 +140,41 @@ plazo, se acepta o reclama en el SII. El filtro *Sin respuesta SII* muestra los
 documentos pendientes, y la columna del plazo se marca en rojo al vencer. Los
 sobres y sus respuestas de recepción quedan en *Sobres recibidos*.
 
+## Referencias, plazo real y guías recibidas
+
+- **Referencias:** se leen las `Referencia` de cada documento recibido. Una nota
+  que referencia una factura recibida del mismo proveedor muestra ese documento
+  de origen, y su factura de proveedor queda como rectificativa de la original
+  (`reversed_entry_id`).
+- **Fecha de recepción en el SII:** se consulta al verificar
+  (`consultarFechaRecepcionSii`, del servicio de registro de reclamos) y el plazo
+  de 8 días se calcula desde ella, en hora de Chile. La librería 0.24.0 no expone
+  este método: se llama con su misma conexión (`Conexion._client` y
+  `Conexion._call_with_retry`), a revisar al cambiar de versión.
+- **Guías recibidas (52):** se asocian a la recepción de inventario por la orden
+  de compra referenciada (código 801, con Compras instalado) o por proveedor y
+  fecha cercana, solo si hay una única candidata.
+
+## Pruebas automatizadas
+
+La carpeta `tests/` contiene pruebas de Odoo que no llaman al SII: sus servicios
+se simulan, y los XML de proveedores y clientes se generan con la estructura de
+los reales pero con datos inventados. Reutilizan la base de pruebas de
+`tf_dte_cl`. Deben correrse en una **base exclusiva para pruebas**:
+
+```bash
+dropdb --if-exists odoo_tests
+./odoo-bin -c /etc/odoo.conf -d odoo_tests --without-demo=all \
+    -i tf_dte_cl_intercambio --test-enable --test-tags /tf_dte_cl_intercambio \
+    --http-port=8070 --logfile=/tmp/odoo_tests.log --stop-after-init
+```
+
+| Archivo | Qué cubre |
+|---|---|
+| `test_parsing.py` | Lectura del sobre estándar, el envoltorio de Acepta y el DTE suelto; descuentos globales; forma de pago; respuestas de clientes; códigos del SII |
+| `test_received.py` | Registro, duplicados, RUT ajeno, entrada por correo, respuesta de recepción, verificación en el SII, factura de proveedor, aceptación, reclamo, facturas al contado y avisos de plazo |
+| `test_emitted.py` | Envío al cliente, respuesta del cliente en el SII (aceptación, reclamo, acuse presunto) y respuestas por correo |
+
 ## Licencia
 
 LGPL-3.

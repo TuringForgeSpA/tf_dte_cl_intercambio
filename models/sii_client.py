@@ -8,10 +8,20 @@ La librería genera los XML de respuesta firmados, pero no envía correos: el
 correo lo maneja Odoo.
 """
 import logging
+from datetime import datetime
 
 from odoo import api, models
 
+from odoo.addons.tf_dte_cl.models.res_partner import normalize_rut
 from odoo.addons.tf_dte_cl.models.sii_client import clean_payload, fe, short_message
+
+try:
+    # Solo para consultarFechaRecepcionSii, que la librería no expone como función.
+    from facturacion_electronica.conexion import Conexion, claim_url
+    from facturacion_electronica.emisor import Emisor
+    from facturacion_electronica.firma import Firma
+except ImportError:  # la librería falta: tf_dte_cl ya lo informa al usarla
+    Conexion = Emisor = Firma = claim_url = None
 
 _logger = logging.getLogger(__name__)
 
@@ -115,6 +125,23 @@ def normalize_claim_response(result) -> dict:
     }
 
 
+RECEPTION_DATE_FORMATS = ('%d-%m-%Y %H:%M:%S', '%Y-%m-%d %H:%M:%S', '%d-%m-%Y %H:%M', '%d-%m-%Y', '%Y-%m-%d')
+
+
+def parse_reception_date(value) -> datetime | None:
+    """Fecha de recepción que devuelve consultarFechaRecepcionSii, o None si no es una fecha.
+
+    El servicio responde texto: la fecha, o un mensaje si el documento no existe.
+    """
+    text = str(value or '').strip()
+    for fmt in RECEPTION_DATE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 class TfDteClSiiClientClaims(models.AbstractModel):
     _inherit = 'tf_dte_cl.sii.client'
 
@@ -136,6 +163,42 @@ class TfDteClSiiClientClaims(models.AbstractModel):
     def tf_dte_cl_register_claim(self, payload: dict) -> dict:
         """Registra una aceptación, acuse de recibo o reclamo (ingresarAceptacionReclamoDoc)."""
         return self._tf_dte_cl_claim_call('ingreso_reclamo_documento', payload)
+
+    @api.model
+    def tf_dte_cl_reception_date(self, payload: dict) -> dict:
+        """Fecha en que el SII recibió un documento (consultarFechaRecepcionSii).
+
+        La librería 0.24.0 no incluye este método del servicio de registro de
+        reclamos. Se llama con la misma conexión que usan sus funciones de reclamo
+        (``Conexion._client`` y ``Conexion._call_with_retry``): revisar al cambiar
+        de versión de la librería.
+        """
+        self._tf_dte_cl_check_library()
+        if Conexion is None:
+            return {'ok': False, 'date': None, 'description': 'Librería facturacion_electronica incompleta',
+                    'transient': False}
+        payload = clean_payload(payload)
+        self._tf_dte_cl_check_payload(payload)
+        document = payload['DTEClaim'][0]
+        rut = normalize_rut(document['RUTEmisor'])
+        try:
+            connection = Conexion(Emisor(payload['Emisor']), Firma(payload['firma_electronica']))
+            if not connection.token:
+                return {'ok': False, 'date': None, 'description': 'Sin token del SII', 'transient': True}
+            server = connection._client(claim_url[connection.Emisor.Modo] + '?wsdl', True)
+            answer = connection._call_with_retry(
+                lambda: server.service.consultarFechaRecepcionSii(
+                    rut[:-2], rut[-1], str(document['TipoDTE']), str(document['Folio']),
+                ),
+                label='consultarFechaRecepcionSii',
+            )
+        except Exception as error:  # noqa: BLE001 - red o respuesta inesperada del SII
+            _logger.exception('Consulta de fecha de recepción en el SII falló')
+            return {'ok': False, 'date': None, 'description': short_message(error), 'transient': True}
+        received = parse_reception_date(answer)
+        if not received:
+            return {'ok': False, 'date': None, 'description': str(answer or '')[:250], 'transient': False}
+        return {'ok': True, 'date': received, 'description': '', 'transient': False}
 
     @api.model
     def tf_dte_cl_claim_history(self, payload: dict) -> dict:

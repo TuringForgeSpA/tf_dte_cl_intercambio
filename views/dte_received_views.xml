@@ -20,6 +20,7 @@
                        decoration-warning="sii_verify_state in ('mismatch', 'modified', 'error')"
                        decoration-danger="sii_verify_state in ('not_found', 'unauthorized', 'annulled')"/>
                 <field name="payment_method" optional="show"/>
+                <field name="sii_deadline_estimated" optional="hide"/>
                 <field name="sii_deadline" optional="show"
                        decoration-danger="sii_claimable and not (sii_accepted or sii_receipt or sii_claim) and sii_deadline and sii_deadline &lt;= context_today().strftime('%Y-%m-%d')"/>
                 <field name="sii_accepted" optional="show" string="Aceptado SII"/>
@@ -94,6 +95,13 @@
                             <field name="envelope_id"/>
                             <field name="sii_verify_date"/>
                             <field name="move_id"/>
+                            <field name="origin_id" invisible="not origin_id"/>
+                            <label for="picking_id" invisible="document_type != '52'"/>
+                            <div class="o_row" invisible="document_type != '52'">
+                                <field name="picking_id" options="{'no_create': True}"/>
+                                <button name="action_tf_dte_cl_match_picking" type="object" string="Buscar"
+                                        class="btn-link" icon="fa-search" invisible="picking_id"/>
+                            </div>
                             <field name="company_id" groups="base.group_multi_company"/>
                         </group>
                     </group>
@@ -114,7 +122,13 @@
                     </div>
                     <group string="Aceptación y reclamo en el SII" invisible="not sii_claimable">
                         <group>
-                            <field name="sii_deadline"/>
+                            <label for="sii_deadline"/>
+                            <div class="o_row">
+                                <field name="sii_deadline"/>
+                                <span class="text-muted" invisible="not sii_deadline_estimated">(estimado)</span>
+                            </div>
+                            <field name="sii_deadline_estimated" invisible="1"/>
+                            <field name="sii_reception_date"/>
                             <field name="sii_accepted"/>
                             <field name="sii_receipt"/>
                             <field name="sii_claim"/>
@@ -133,6 +147,17 @@
                                     <field name="price_unit"/>
                                     <field name="amount" sum="Total"/>
                                     <field name="is_exempt"/>
+                                </list>
+                            </field>
+                        </page>
+                        <page string="Referencias" name="references" invisible="not reference_ids">
+                            <field name="reference_ids">
+                                <list>
+                                    <field name="document_type_name"/>
+                                    <field name="folio"/>
+                                    <field name="date"/>
+                                    <field name="code"/>
+                                    <field name="reason"/>
                                 </list>
                             </field>
                         </page>

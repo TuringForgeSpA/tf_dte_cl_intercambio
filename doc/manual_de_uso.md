@@ -1,6 +1,6 @@
 # Manual de uso — Intercambio de DTE (tf_dte_cl_intercambio)
 
-Módulo para Odoo 18, versión 18.0.5.0.0. Complementa a `tf_dte_cl`; su
+Módulo para Odoo 18, versión 18.0.6.0.0. Complementa a `tf_dte_cl`; su
 manual cubre la emisión de documentos, y este, el intercambio con clientes y
 proveedores.
 
@@ -192,6 +192,12 @@ Si el total no coincide con el del documento, queda un aviso en el historial de
 la factura para revisarla. Revisa también las cuentas y, si corresponde, cambia
 el diario antes de confirmar.
 
+**Notas de crédito y débito.** Si la nota referencia una factura del mismo
+proveedor ya registrada en *Documentos recibidos*, el documento muestra ese
+**documento de origen**. Al crear la factura de una nota de crédito, queda
+enlazada como rectificativa de la factura original, y en ambas queda
+constancia. Las referencias del XML se ven en la pestaña **Referencias**.
+
 > **Importante:** no uses el botón **Subir** de la lista de facturas de
 > proveedor. Es una función estándar de Odoo que no reconoce el DTE chileno:
 > solo adjunta el archivo a una factura en blanco. El documento debe entrar por
@@ -219,9 +225,11 @@ Reglas del SII, que los botones respetan:
 - **las facturas al contado o sin costo no admiten aceptación ni reclamo**. En
   ellas no aparecen los botones, y el formulario lo explica.
 
-El **plazo** que muestra el módulo es **estimado**: se calcula desde la fecha de
-emisión, que es igual o anterior a la recepción en el SII. El plazo real nunca
-es más corto que el mostrado. Cuando vence sin respuesta, la columna se marca en
+El **plazo** se calcula desde la **fecha de recepción en el SII**, que el módulo
+consulta al verificar el documento y muestra en el campo *Recepción en el SII*.
+Mientras no la conoce, lo estima desde la fecha de emisión y lo marca como
+**(estimado)**: la emisión es igual o anterior a la recepción, así que el plazo
+real nunca es más corto que el estimado. Cuando vence sin respuesta, la columna se marca en
 rojo, y el filtro **Sin respuesta SII** muestra los pendientes.
 
 ### 4.6 Avisos de plazo
@@ -236,6 +244,20 @@ que el plazo. Se asigna a:
 
 La actividad se cierra sola al aceptar o reclamar el documento.
 
+### 4.7 Guías de despacho recibidas
+
+Las guías (52) no generan factura, pero se asocian con la **recepción de
+inventario** correspondiente:
+
+- si la guía referencia una **orden de compra**, se asocia a la recepción de esa
+  orden (requiere el módulo de Compras);
+- si no, se asocia a la recepción **del mismo proveedor con fecha cercana**
+  (hasta 7 días), **solo si hay una única candidata**.
+
+Si no hay una coincidencia segura, en la guía usa **Buscar** junto al campo
+*Recepción*, o elígela a mano. La recepción muestra sus guías en la pestaña
+**Guías del proveedor** (visible para usuarios de facturación).
+
 ---
 
 ## 5. Procesos automáticos
@@ -246,7 +268,7 @@ Se ven en *Ajustes > Técnico > Tareas programadas*:
 |---|---|---|
 | DTE: enviar documentos aceptados al receptor | 15 minutos | Envía el XML y el PDF a los clientes |
 | DTE: responder la recepción de los sobres recibidos | 10 minutos | Envía la respuesta de recepción a los proveedores |
-| DTE: verificar en el SII los documentos recibidos | 30 minutos | Consulta si los documentos recibidos existen en el SII |
+| DTE: verificar en el SII los documentos recibidos | 30 minutos | Consulta si los documentos recibidos existen en el SII, y su fecha de recepción |
 | DTE: consultar la respuesta de los clientes en el SII | 4 horas | Trae las aceptaciones y reclamos de tus clientes |
 | DTE: avisar plazos de documentos recibidos | Diaria | Crea las actividades de aviso de plazo |
 

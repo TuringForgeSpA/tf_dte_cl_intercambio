@@ -13,6 +13,7 @@ import base64
 import logging
 from datetime import date, timedelta
 
+import pytz
 from lxml import etree
 
 from odoo import api, fields, models
@@ -22,6 +23,25 @@ from odoo.addons.tf_dte_cl.models.dte_lines import round_half_up
 from odoo.addons.tf_dte_cl.models.res_partner import normalize_rut
 
 from .sii_client import CLAIM_ACTIONS, CLAIM_DOCUMENT_TYPES
+
+# Referencias que apuntan a un documento tributario del mismo proveedor (notas sobre facturas).
+ORIGIN_DOCUMENT_TYPES = ('33', '34', '46', '56', '61')
+# Código del SII para una orden de compra en las referencias (TpoDocRef).
+PURCHASE_ORDER_REFERENCE = '801'
+# Ventana de fechas para asociar una guía recibida con una recepción del mismo proveedor.
+PICKING_MATCH_DAYS = 7
+# El SII informa las fechas en hora de Chile; Odoo guarda las fechas con hora en UTC.
+SII_TZ = pytz.timezone('America/Santiago')
+
+
+def sii_local_to_utc(value):
+    """Fecha y hora local de Chile (sin zona) a UTC sin zona, como la guarda Odoo."""
+    return SII_TZ.localize(value).astimezone(pytz.utc).replace(tzinfo=None)
+
+
+def utc_to_sii_date(value):
+    """Fecha (día) en Chile de una fecha y hora UTC guardada por Odoo."""
+    return pytz.utc.localize(value).astimezone(SII_TZ).date()
 
 _logger = logging.getLogger(__name__)
 
@@ -135,10 +155,30 @@ class TfDteClReceived(models.Model):
     sii_claimable = fields.Boolean(
         string='Admite aceptación o reclamo', compute='_compute_sii_claimable', store=True,
     )
+    sii_reception_date = fields.Datetime(
+        string='Recepción en el SII', readonly=True, copy=False,
+        help='Fecha y hora en que el SII recibió el documento (consultarFechaRecepcionSii).',
+    )
     sii_deadline = fields.Date(
-        string='Plazo SII (estimado)', compute='_compute_sii_deadline', store=True,
-        help='8 días corridos desde la recepción en el SII. Se calcula desde la fecha de emisión, que es '
-             'igual o anterior a la recepción, por lo que el plazo real nunca es más corto que este.',
+        string='Plazo SII', compute='_compute_sii_deadline', store=True,
+        help='8 días corridos desde la recepción en el SII. Mientras no se conoce la fecha de recepción, '
+             'se estima desde la fecha de emisión, que es igual o anterior: el plazo real nunca es más corto.',
+    )
+    sii_deadline_estimated = fields.Boolean(
+        string='Plazo estimado', compute='_compute_sii_deadline', store=True,
+        help='El plazo se calculó desde la emisión porque aún no se conoce la fecha de recepción en el SII.',
+    )
+    reference_ids = fields.One2many(
+        'tf_dte_cl.received.reference', 'received_id', string='Referencias', readonly=True,
+    )
+    origin_id = fields.Many2one(
+        'tf_dte_cl.received', string='Documento de origen', compute='_compute_origin_id',
+        help='Documento recibido del mismo proveedor al que se refiere esta nota.',
+    )
+    picking_id = fields.Many2one(
+        'stock.picking', string='Recepción', copy=False, index=True, check_company=True,
+        domain="[('picking_type_code', '=', 'incoming'), ('company_id', '=', company_id)]",
+        help='Recepción de inventario asociada a esta guía de despacho.',
     )
     sii_accepted = fields.Boolean(string='Contenido aceptado', readonly=True, copy=False)
     sii_receipt = fields.Boolean(string='Acuse de recibo otorgado', readonly=True, copy=False)
@@ -179,12 +219,31 @@ class TfDteClReceived(models.Model):
                 and received.payment_method not in NO_CLAIM_PAYMENT_METHODS
             )
 
-    @api.depends('date', 'sii_claimable')
+    @api.depends('date', 'sii_claimable', 'sii_reception_date')
     def _compute_sii_deadline(self):
         for received in self:
+            base = utc_to_sii_date(received.sii_reception_date) if received.sii_reception_date else received.date
             received.sii_deadline = (
-                received.sii_claimable and received.date and received.date + timedelta(days=CLAIM_DAYS)
+                received.sii_claimable and base and base + timedelta(days=CLAIM_DAYS)
             ) or False
+            received.sii_deadline_estimated = bool(received.sii_deadline and not received.sii_reception_date)
+
+    @api.depends('reference_ids', 'issuer_vat', 'company_id')
+    def _compute_origin_id(self):
+        for received in self:
+            origin = self.browse()
+            for reference in received.reference_ids:
+                if reference.document_type in ORIGIN_DOCUMENT_TYPES and reference.folio.isdigit():
+                    origin = self.search([
+                        ('company_id', '=', received.company_id.id),
+                        ('issuer_vat', '=', received.issuer_vat),
+                        ('document_type', '=', reference.document_type),
+                        ('folio', '=', int(reference.folio)),
+                        ('id', '!=', received._origin.id or received.id),
+                    ], limit=1)
+                    if origin:
+                        break
+            received.origin_id = origin
 
     # ------------------------------------------------------------------
     # Verificación en el SII
@@ -228,7 +287,19 @@ class TfDteClReceived(models.Model):
                 'Verificación en el SII: %(state)s. %(detail)s',
                 state=dict(VERIFY_STATES)[state], detail=self.sii_verify_detail or '',
             ))
+        if state in ('verified', 'mismatch', 'modified'):
+            self._tf_dte_cl_update_reception_date()
         return state
+
+    def _tf_dte_cl_update_reception_date(self) -> None:
+        """Consulta en el SII la fecha de recepción, para calcular el plazo real de 8 días."""
+        for received in self.filtered(lambda r: r.sii_claimable and not r.sii_reception_date):
+            result = self.env['tf_dte_cl.sii.client'].tf_dte_cl_reception_date(received._tf_dte_cl_claim_payload())
+            if result['ok']:
+                received.sii_reception_date = sii_local_to_utc(result['date'])
+            elif not result['transient']:
+                _logger.info('Fecha de recepción de %s no disponible: %s',
+                             received.display_reference, result['description'])
 
     def action_tf_dte_cl_verify(self):
         for received in self:
@@ -237,13 +308,29 @@ class TfDteClReceived(models.Model):
 
     @api.model
     def _cron_tf_dte_cl_verify(self, limit=50):
-        """Verifica en el SII los documentos pendientes; "no recibido" se reintenta unos días."""
+        """Verifica en el SII los documentos pendientes; "no recibido" se reintenta unos días.
+
+        También completa la fecha de recepción de los documentos ya verificados que
+        todavía están dentro del plazo de reclamo.
+        """
         since = fields.Date.context_today(self) - timedelta(days=VERIFY_RETRY_DAYS)
         documents = self.search([
             ('sii_verify_state', 'in', list(VERIFY_RETRY)),
             ('date', '>=', since),
             ('document_type', 'in', list(VERIFIABLE_TYPES)),
         ], order='sii_verify_date asc nulls first, id', limit=limit)
+        pending_dates = self.search([
+            ('sii_claimable', '=', True),
+            ('sii_reception_date', '=', False),
+            ('sii_verify_state', 'in', ['verified', 'mismatch', 'modified']),
+            ('sii_deadline', '>=', fields.Date.context_today(self)),
+        ], limit=limit)
+        for document_id in pending_dates.ids:
+            try:
+                with self.env.cr.savepoint():
+                    self.browse(document_id)._tf_dte_cl_update_reception_date()
+            except Exception:  # noqa: BLE001 - un documento no debe detener el lote
+                _logger.exception('Error al consultar la fecha de recepción del documento %s', document_id)
         for document_id in documents.ids:
             try:
                 with self.env.cr.savepoint():
@@ -375,6 +462,10 @@ class TfDteClReceived(models.Model):
         }
 
     def action_tf_dte_cl_query_sii(self):
+        self._tf_dte_cl_update_reception_date()
+        return self._tf_dte_cl_query_sii_events()
+
+    def _tf_dte_cl_query_sii_events(self):
         """Consulta en el SII los eventos del documento y actualiza su estado."""
         client = self.env['tf_dte_cl.sii.client']
         for received in self.filtered('sii_claimable'):
@@ -435,6 +526,13 @@ class TfDteClReceived(models.Model):
                 'amount': line['amount'],
                 'is_exempt': line['is_exempt'],
             }) for line in document['lines']],
+            'reference_ids': [fields.Command.create({
+                'document_type': reference['document_type'],
+                'folio': reference['folio'],
+                'date': _parse_date(reference['date']),
+                'code': reference['code'],
+                'reason': (reference['reason'] or '')[:90],
+            }) for reference in document.get('references') or []],
         }
 
     # ------------------------------------------------------------------
@@ -493,12 +591,21 @@ class TfDteClReceived(models.Model):
         partner = self._tf_dte_cl_find_partner()
         taxes = company.account_purchase_tax_id
         move_type = 'in_refund' if self.document_type == '61' else 'in_invoice'
+        origin = self.origin_id
+        origin_move = origin.move_id
+        ref = '%s %s' % (self.document_type_name, self.folio)
+        if origin:
+            ref = '%s (ref. %s %s)' % (ref, origin.document_type_name, origin.folio)
+        extra = {}
+        if move_type == 'in_refund' and origin_move:
+            extra['reversed_entry_id'] = origin_move.id
         move = self.env['account.move'].with_company(company).create({
+            **extra,
             'move_type': move_type,
             'partner_id': partner.id,
             'invoice_date': self.date,
             'date': self.date,
-            'ref': '%s %s' % (self.document_type_name, self.folio),
+            'ref': ref,
             'invoice_line_ids': [fields.Command.create({
                 'product_id': product.id,
                 'name': line.name,
@@ -509,6 +616,7 @@ class TfDteClReceived(models.Model):
         })
         self.write({'move_id': move.id, 'state': 'billed'})
         self._tf_dte_cl_attach_xml(move)
+        self._tf_dte_cl_link_origin(move)
         if self.sii_verify_state != 'verified':
             move.message_post(body=self.env._(
                 'Atención: el documento de origen no está verificado en el SII (%s). '
@@ -527,6 +635,80 @@ class TfDteClReceived(models.Model):
         else:
             self.message_post(body=self.env._('Factura de proveedor creada en borrador: %s.', move.display_name))
         return move
+
+    def _tf_dte_cl_link_origin(self, move) -> None:
+        """Deja constancia del documento de origen de una nota, en la nota y en la factura original."""
+        self.ensure_one()
+        origin = self.origin_id
+        if origin.move_id:
+            move.message_post(body=self.env._(
+                'Referencia a %(doc)s del proveedor: factura %(move)s.',
+                doc='%s %s' % (origin.document_type_name, origin.folio), move=origin.move_id.display_name,
+            ))
+            origin.move_id.message_post(body=self.env._(
+                'El proveedor emitió %(note)s sobre este documento: %(move)s.',
+                note='%s %s' % (self.document_type_name, self.folio), move=move.display_name,
+            ))
+        elif origin:
+            move.message_post(body=self.env._(
+                'Referencia a %s del proveedor, que aún no tiene factura de proveedor.',
+                '%s %s' % (origin.document_type_name, origin.folio),
+            ))
+        elif self.reference_ids:
+            move.message_post(body=self.env._(
+                'Referencias del documento: %s. No se encontró el documento de origen entre los recibidos.',
+                ', '.join('%s %s' % (r.document_type_name or r.document_type, r.folio) for r in self.reference_ids),
+            ))
+
+    # ------------------------------------------------------------------
+    # Guías de despacho: recepción asociada
+    # ------------------------------------------------------------------
+    def _tf_dte_cl_picking_candidates(self):
+        """Recepciones posibles para una guía: por orden de compra referenciada o por proveedor y fecha."""
+        self.ensure_one()
+        Picking = self.env['stock.picking']
+        base = [
+            ('picking_type_code', '=', 'incoming'),
+            ('company_id', '=', self.company_id.id),
+            ('state', '!=', 'cancel'),
+            ('tf_dte_cl_received_guide_ids', '=', False),
+        ]
+        orders = [r.folio for r in self.reference_ids if r.document_type == PURCHASE_ORDER_REFERENCE and r.folio]
+        if orders and 'purchase_id' in Picking._fields:
+            by_order = Picking.search(base + ['|', ('purchase_id.name', 'in', orders),
+                                              ('purchase_id.partner_ref', 'in', orders)])
+            if by_order:
+                return by_order
+        partners = self.env['res.partner'].search([('vat', '=', self.issuer_vat)])
+        if not partners or not self.date:
+            return Picking
+        window = timedelta(days=PICKING_MATCH_DAYS)
+        return Picking.search(base + [
+            ('partner_id', 'child_of', partners.commercial_partner_id.ids),
+            ('scheduled_date', '>=', fields.Datetime.to_datetime(self.date - window)),
+            ('scheduled_date', '<=', fields.Datetime.to_datetime(self.date + window + timedelta(days=1))),
+        ])
+
+    def _tf_dte_cl_match_picking(self) -> None:
+        """Asocia la guía con su recepción solo si hay una única candidata."""
+        for received in self.filtered(lambda r: r.document_type == '52' and not r.picking_id):
+            candidates = received._tf_dte_cl_picking_candidates()
+            if len(candidates) == 1:
+                received.picking_id = candidates
+                received.message_post(body=self.env._('Asociada a la recepción %s.', candidates.name))
+                candidates.message_post(body=self.env._(
+                    'Guía de despacho del proveedor asociada: %s.', received.display_reference,
+                ))
+
+    def action_tf_dte_cl_match_picking(self):
+        self._tf_dte_cl_match_picking()
+        unmatched = self.filtered(lambda r: r.document_type == '52' and not r.picking_id)
+        if unmatched:
+            raise UserError(self.env._(
+                'No se encontró una única recepción para %s. Selecciónela a mano en el campo Recepción.',
+                ', '.join(unmatched.mapped('display_reference')),
+            ))
+        return True
 
     def _tf_dte_cl_attach_xml(self, move) -> None:
         self.ensure_one()
@@ -596,3 +778,31 @@ class TfDteClReceivedClaim(models.TransientModel):
                     type=dict(CLAIM_TYPES)[self.claim_type], reason=self.reason,
                 ))
         return {'type': 'ir.actions.act_window_close'}
+
+
+def _parse_date(value: str):
+    try:
+        return date.fromisoformat((value or '')[:10])
+    except ValueError:
+        return False
+
+
+class TfDteClReceivedReference(models.Model):
+    _name = 'tf_dte_cl.received.reference'
+    _description = 'Referencia de un documento recibido'
+    _order = 'received_id, id'
+
+    received_id = fields.Many2one('tf_dte_cl.received', required=True, ondelete='cascade', index=True)
+    document_type = fields.Char(string='Tipo', help='Código del SII del documento referido (TpoDocRef).')
+    document_type_name = fields.Char(string='Documento', compute='_compute_document_type_name')
+    folio = fields.Char(string='Folio')
+    date = fields.Date(string='Fecha')
+    code = fields.Char(string='Código', help='1: anula, 2: corrige texto, 3: corrige montos (CodRef).')
+    reason = fields.Char(string='Razón')
+
+    @api.depends('document_type')
+    def _compute_document_type_name(self):
+        types = self.env['tf_dte_cl.document_type'].with_context(active_test=False)
+        for reference in self:
+            doc_type = types.search([('code', '=', reference.document_type)], limit=1)
+            reference.document_type_name = doc_type.name or reference.document_type

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ruta real: views/stock_picking_views.xml -->
+<odoo>
+    <record id="view_picking_form_tf_dte_cl_intercambio" model="ir.ui.view">
+        <field name="name">stock.picking.form.tf_dte_cl_intercambio</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.view_picking_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet/notebook" position="inside">
+                <page string="Guías del proveedor" name="tf_dte_cl_received_guides"
+                      groups="account.group_account_invoice"
+                      invisible="picking_type_code != 'incoming'">
+                    <field name="tf_dte_cl_received_guide_ids" readonly="1">
+                        <list>
+                            <field name="display_reference"/>
+                            <field name="issuer_name"/>
+                            <field name="date"/>
+                            <field name="amount_total"/>
+                            <field name="sii_verify_state" widget="badge"
+                                   decoration-success="sii_verify_state == 'verified'"
+                                   decoration-danger="sii_verify_state in ('not_found', 'unauthorized', 'annulled')"/>
+                        </list>
+                    </field>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

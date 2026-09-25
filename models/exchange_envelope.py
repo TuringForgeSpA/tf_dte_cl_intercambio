@@ -128,6 +128,13 @@ def parse_envelope(raw: bytes) -> dict:
                 'is_exempt': bool(_text(detail, 'IndExe')),
             })
         lines += _global_adjustments(document, lines)
+        references = [{
+            'document_type': _text(reference, 'TpoDocRef'),
+            'folio': _text(reference, 'FolioRef'),
+            'date': _text(reference, 'FchRef'),
+            'code': _text(reference, 'CodRef'),
+            'reason': _text(reference, 'RazonRef'),
+        } for reference in document.findall('Referencia')]
         documents.append({
             'document_type': _text(id_doc, 'TipoDTE'),
             'folio': _text(id_doc, 'Folio'),
@@ -145,6 +152,7 @@ def parse_envelope(raw: bytes) -> dict:
             'amount_total': _amount(totals, 'MntTotal'),
             'xml': etree.tostring(dte, encoding='ISO-8859-1').decode('ISO-8859-1'),
             'lines': lines,
+            'references': references,
         })
     if not documents:
         raise ValueError('El archivo no contiene documentos legibles.')
@@ -315,6 +323,7 @@ class TfDteClExchangeEnvelope(models.Model):
             fields.Command.create(self.env['tf_dte_cl.received']._tf_dte_cl_values(document, envelope))
             for document in data['documents']
         ]
+        envelope.received_ids.filtered(lambda r: r.document_type == '52')._tf_dte_cl_match_picking()
         return envelope
 
     @api.model
