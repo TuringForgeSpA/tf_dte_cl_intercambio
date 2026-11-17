@@ -28,6 +28,9 @@ EXCHANGE_STATES = [
     ('error', 'Error'),
 ]
 SII_ACCEPTED_STATES = ('accepted', 'accepted_objections')
+# El intercambio (Res. Ex. SII N° 45 de 2003) es entre contribuyentes: facturas, notas y
+# guías. Las boletas (39/41) se entregan al consumidor impresas o por correo, sin intercambio.
+EXCHANGE_DOCUMENT_TYPES = ('33', '34', '52', '56', '61')
 
 
 class AccountMove(models.Model):
@@ -70,6 +73,11 @@ class AccountMove(models.Model):
         if self.tf_dte_cl_exchange_state == 'sent':
             return 'sent'
         email = self._tf_dte_cl_exchange_recipient()
+        boleta_note = any(ref.document_type_id.code in ('39', '41') for ref in self.tf_dte_cl_reference_ids)
+        if self.tf_dte_cl_document_type not in EXCHANGE_DOCUMENT_TYPES or boleta_note:
+            self.write({'tf_dte_cl_exchange_state': 'not_applicable',
+                        'tf_dte_cl_exchange_error': self.env._('Este tipo de documento no se intercambia.')})
+            return 'not_applicable'
         if not email:
             self.write({'tf_dte_cl_exchange_state': 'not_applicable',
                         'tf_dte_cl_exchange_error': self.env._('El cliente no tiene correo de intercambio.')})
@@ -131,6 +139,7 @@ class AccountMove(models.Model):
         """
         moves = self.search([
             ('tf_dte_cl_state', 'in', list(SII_ACCEPTED_STATES)),
+            ('tf_dte_cl_document_type', 'in', list(EXCHANGE_DOCUMENT_TYPES)),
             ('tf_dte_cl_exchange_state', 'in', [False, 'to_send', 'error']),
             ('company_id.tf_dte_cl_exchange_auto_send', '=', True),
         ], order='id', limit=limit)
